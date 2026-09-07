@@ -240,6 +240,64 @@ final class UsageForecastTests: XCTestCase {
     }
 }
 
+/// Where the forecast is attached. It has to ride on whatever reading is
+/// being shown, not only on one that has just arrived.
+@MainActor
+final class ForecastOnRememberedReadingsTests: XCTestCase {
+    private func defaults() -> UserDefaults {
+        let name = "ForecastRemembered.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: name)!
+        defaults.removePersistentDomain(forName: name)
+        return defaults
+    }
+
+    /// A session an hour into its five hours, a quarter spent: it goes before
+    /// it rolls, and the ring has to say so even though the number came out of
+    /// the archive rather than off the wire.
+    ///
+    /// The reported case. A relaunch during a rate-limit back-off showed the
+    /// remembered reading with no forecast on it, and a session that was an
+    /// hour short sat there green.
+    func testARememberedReadingIsForecastToo() throws {
+        let defaults = defaults()
+        let archive = UsageArchive(defaults: defaults)
+        let remembered = ProviderSnapshot(
+            id: "claude", displayName: "Claude", glyph: .claude,
+            fidelity: .official, status: .ok,
+            windows: [LimitWindow(id: "session", label: "Current session",
+                                  usedFraction: 0.24,
+                                  resetsAt: Date().addingTimeInterval(4 * 3600))],
+            headlineID: "session"
+        )
+        archive.save(["claude": (remembered, Date().addingTimeInterval(-60))])
+
+        let store = UsageStore(providers: [ClaudeOAuthProvider(profile: .default(home: URL(fileURLWithPath: "/Users/nobody")), archive: archive)],
+                               archive: archive)
+        let window = try XCTUnwrap(store.snapshots.first?.headline)
+        XCTAssertNotNil(window.runsOutAt, "the archived reading came back without its forecast")
+        XCTAssertTrue(window.runsOutBeforeReset)
+    }
+
+    /// And a window that is being spent gently keeps its green, archive or not.
+    func testARememberedReadingThatLastsStaysQuiet() throws {
+        let defaults = defaults()
+        let archive = UsageArchive(defaults: defaults)
+        let remembered = ProviderSnapshot(
+            id: "claude", displayName: "Claude", glyph: .claude,
+            fidelity: .official, status: .ok,
+            windows: [LimitWindow(id: "session", label: "Current session",
+                                  usedFraction: 0.05,
+                                  resetsAt: Date().addingTimeInterval(3600))],
+            headlineID: "session"
+        )
+        archive.save(["claude": (remembered, Date().addingTimeInterval(-60))])
+
+        let store = UsageStore(providers: [ClaudeOAuthProvider(profile: .default(home: URL(fileURLWithPath: "/Users/nobody")), archive: archive)],
+                               archive: archive)
+        XCTAssertNil(store.snapshots.first?.headline?.runsOutAt)
+    }
+}
+
 /// The colour rule the forecast feeds.
 final class ForecastBandTests: XCTestCase {
     /// The point of the whole thing: a percentage that looks comfortable, on a

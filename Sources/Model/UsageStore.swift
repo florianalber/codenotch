@@ -114,7 +114,7 @@ final class UsageStore: ObservableObject {
             guard let remembered = lastGood[provider.id] else { return Self.placeholder(provider) }
             var snapshot = remembered.snapshot
             snapshot.status = .stale(since: remembered.fetchedAt)
-            return snapshot
+            return forecast(snapshot)
         }
     }
 
@@ -145,7 +145,7 @@ final class UsageStore: ObservableObject {
         if let remembered = lastGood[provider.id] {
             var snapshot = remembered.snapshot
             snapshot.status = .stale(since: remembered.fetchedAt)
-            seed = snapshot
+            seed = forecast(snapshot)
         } else {
             seed = Self.placeholder(provider)
         }
@@ -382,31 +382,55 @@ final class UsageStore: ObservableObject {
     /// whether that runs it out before it resets.
     ///
     /// Done here rather than in the provider because it is not a fact the
-    /// vendor reported — it is a fact about this machine's own readings over
-    /// time, and only the store has those.
+    /// vendor reported — the window's length and this machine's own past
+    /// readings are what say it, and only the store has those.
+    ///
+    /// Applied to *every* snapshot on its way to the screen, not only to one
+    /// that has just arrived. A reading remembered from the archive is where
+    /// this went wrong first: after a relaunch — or through a rate-limit
+    /// back-off, which is the same thing from the ring's point of view — the
+    /// cell showed the remembered number with no forecast on it, so a session
+    /// that was an hour short sat there green. Nothing about that needs a
+    /// fresh fetch: a percentage and a reset time are all the window's own
+    /// length asks for. And an ageing reading fades the warning by itself,
+    /// since the elapsed time grows while the figure stands still.
+    ///
+    /// Pure, deliberately: the baselines are advanced only by `learnPace`, on
+    /// a reading that genuinely just arrived, so a remembered one cannot
+    /// backdate them.
     private func forecast(_ snapshot: ProviderSnapshot, now: Date = Date()) -> ProviderSnapshot {
         var updated = snapshot
-        var changed = false
-
         updated.windows = snapshot.windows.map { window in
             guard let fraction = window.usedFraction else { return window }
-            let key = "\(snapshot.id)\(ProviderSnapshot.cellSeparator)\(window.id)"
+            var window = window
+            window.runsOutAt = UsageForecast.runsOut(
+                baseline: paces[paceKey(snapshot.id, window.id)],
+                window: window.id, fraction: fraction,
+                resetsAt: window.resetsAt, now: now
+            )
+            return window
+        }
+        return updated
+    }
+
+    /// Advance each window's baseline from a reading that has just arrived.
+    private func learnPace(from snapshot: ProviderSnapshot, now: Date = Date()) {
+        var changed = false
+        for window in snapshot.windows {
+            guard let fraction = window.usedFraction else { continue }
+            let key = paceKey(snapshot.id, window.id)
             let baseline = UsageForecast.baseline(paces[key], fraction: fraction,
                                                   resetsAt: window.resetsAt, now: now)
             if paces[key] != baseline {
                 paces[key] = baseline
                 changed = true
             }
-
-            var window = window
-            window.runsOutAt = UsageForecast.runsOut(baseline: baseline, window: window.id,
-                                                     fraction: fraction,
-                                                     resetsAt: window.resetsAt, now: now)
-            return window
         }
-
         if changed { archive.savePaces(paces) }
-        return updated
+    }
+
+    private func paceKey(_ providerID: String, _ windowID: String) -> String {
+        "\(providerID)\(ProviderSnapshot.cellSeparator)\(windowID)"
     }
 
     private func isCurrent(_ providerID: String, version: UUID?) -> Bool {
@@ -429,6 +453,7 @@ final class UsageStore: ObservableObject {
             archive.save(lastGood)
             refusedAccess.remove(provider.id)
             Log.usage.debug("\(provider.id, privacy: .public): \(fresh.windows.count) window(s)")
+            learnPace(from: fresh)
             return forecast(fresh)
         } catch {
             guard isCurrent(provider.id, version: version) else { return nil }
@@ -478,7 +503,11 @@ final class UsageStore: ObservableObject {
         let age = Date().timeIntervalSince(previous.fetchedAt)
         var snapshot = previous.snapshot
         snapshot.status = age > staleAfter ? .stale(since: previous.fetchedAt) : previous.snapshot.status
-        return snapshot
+        // Forecast the remembered reading too. A rate-limit back-off is where
+        // this matters most: nothing arrives for a quarter of an hour, and it
+        // is exactly the quarter of an hour in which a window that is being
+        // spent too fast most needs to say so.
+        return forecast(snapshot)
     }
 
     /// True when the new status makes any remembered reading untrue rather than
