@@ -122,6 +122,85 @@ final class UsageResponseTests: XCTestCase {
         XCTAssertEqual(windows.first?.label, "Scoped")
     }
 
+    /// An Enterprise seat is billed against a spend limit rather than a share
+    /// of a plan, and the two money figures are the thing being watched.
+    func testASpendLimitBecomesAMeteredWindow() throws {
+        let json = """
+        { "limits": [
+            { "kind": "spend_limit", "used_dollars": 12.5, "limit_dollars": 200,
+              "resets_at": "2026-10-01T00:00:00.000000+00:00" } ] }
+        """
+        let window = try XCTUnwrap(try decode(json).limitWindows().first)
+        XCTAssertTrue(window.isMetered)
+        // Its own percentage is absent, so the share comes from dividing the
+        // vendor's own two figures — the same number, said the other way.
+        XCTAssertEqual(window.usedFraction ?? -1, 0.0625, accuracy: 0.0001)
+        XCTAssertEqual(window.usedDollars, 12.5)
+        XCTAssertEqual(window.limitDollars, 200)
+    }
+
+    /// The card leads with the balance, because "6% Used" is true of a spend
+    /// limit and useless.
+    func testAMeteredWindowReadsAsMoney() {
+        let window = LimitWindow(id: "spend_limit", label: "Spend limit",
+                                 usedFraction: 0, usedDollars: 0, limitDollars: 200)
+        let summary = window.summary
+        XCTAssertTrue(summary.contains("200"), summary)
+        XCTAssertTrue(summary.hasSuffix("used"), summary)
+        XCTAssertFalse(summary.contains("%"), summary)
+    }
+
+    /// Formatted in the reader's own number format, in the currency it is
+    /// actually billed in.
+    ///
+    /// The gap before the symbol is a *non-breaking* space, spelled out here
+    /// rather than normalised away: it is what the formatter produces, and a
+    /// test that quietly accepts either would not notice the day the symbol
+    /// wraps onto its own line in a 600px card.
+    func testMoneyFollowsTheReadersNumberFormat() {
+        XCTAssertEqual(LimitWindow.money(200, locale: Locale(identifier: "de_DE")),
+                       "200,00\u{00A0}$")
+        XCTAssertEqual(LimitWindow.money(200, locale: Locale(identifier: "en_US")), "$200.00")
+    }
+
+    /// A balance still says something without a reset date; dropping it for
+    /// want of one would hide the only figure such a seat has.
+    func testAMeteredWindowSurvivesAMissingResetTime() throws {
+        let json = """
+        { "limits": [ { "kind": "spend_limit", "used_dollars": 4, "limit_dollars": 50,
+                        "resets_at": null } ] }
+        """
+        XCTAssertEqual(try decode(json).limitWindows().count, 1)
+    }
+
+    /// A `percent` the response *does* state wins over the division: it is the
+    /// vendor's own rounding, and the two can disagree in the last digit.
+    func testAStatedPercentageWinsOverTheDivision() throws {
+        let json = """
+        { "limits": [ { "kind": "spend_limit", "percent": 7, "used_dollars": 12.5,
+                        "limit_dollars": 200,
+                        "resets_at": "2026-10-01T00:00:00.000000+00:00" } ] }
+        """
+        let window = try XCTUnwrap(try decode(json).limitWindows().first)
+        XCTAssertEqual(window.usedFraction ?? -1, 0.07, accuracy: 0.0001)
+    }
+
+    /// One entry without a `percent` must not cost the reading of the others.
+    /// It did: `percent` was non-optional, so a single such entry failed the
+    /// whole response and blanked every ring.
+    func testAnEntryWithoutAPercentageDoesNotFailTheResponse() throws {
+        let json = """
+        { "limits": [
+            { "kind": "session", "percent": 52,
+              "resets_at": "2026-08-28T09:50:00.316290+00:00" },
+            { "kind": "mystery_window",
+              "resets_at": "2026-10-01T00:00:00.000000+00:00" } ] }
+        """
+        let windows = try decode(json).limitWindows()
+        XCTAssertEqual(windows.map(\.id), ["session"])
+        XCTAssertEqual(windows.first?.usedFraction ?? -1, 0.52, accuracy: 0.0001)
+    }
+
     func testUnknownKindsGetAReadableLabel() {
         XCTAssertEqual(UsageResponse.label(forKind: "weekly_opus"), "Opus")
         XCTAssertEqual(UsageResponse.label(forKind: "weekly_cowork"), "Cowork")

@@ -239,8 +239,15 @@ actor ClaudeOAuthProvider: UsageProvider {
 struct UsageResponse: Decodable {
     struct Limit: Decodable {
         let kind: String
-        let percent: Double
+        /// Optional on purpose. A window metered in money need not carry a
+        /// share at all, and a non-optional `percent` made the *whole*
+        /// response fail to decode when one entry did not have it — taking
+        /// the session and weekly readings down with it.
+        let percent: Double?
         let resetsAt: Date?
+        /// Set on a seat billed against a spend limit rather than a plan.
+        let usedDollars: Double?
+        let limitDollars: Double?
         /// What the window is scoped to, where it is scoped to anything.
         ///
         /// The model-specific weekly window comes back as `weekly_scoped` for
@@ -259,15 +266,27 @@ struct UsageResponse: Decodable {
             return UsageResponse.label(forKind: kind)
         }
 
+        /// The share of the window that is gone, however the response states
+        /// it: its own percentage where there is one, and otherwise what the
+        /// two money figures work out to. Dividing the vendor's own numbers is
+        /// not a guess — it is the same figure, said the other way round.
+        var fraction: Double? {
+            if let percent { return percent / 100 }
+            guard let usedDollars, let limitDollars, limitDollars > 0 else { return nil }
+            return usedDollars / limitDollars
+        }
+
         private enum CodingKeys: String, CodingKey {
-            case kind, percent, resetsAt, scope
+            case kind, percent, resetsAt, scope, usedDollars, limitDollars
         }
 
         init(from decoder: Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
             kind = try container.decode(String.self, forKey: .kind)
-            percent = try container.decode(Double.self, forKey: .percent)
+            percent = try container.decodeIfPresent(Double.self, forKey: .percent)
             resetsAt = try container.decodeIfPresent(Date.self, forKey: .resetsAt)
+            usedDollars = try container.decodeIfPresent(Double.self, forKey: .usedDollars)
+            limitDollars = try container.decodeIfPresent(Double.self, forKey: .limitDollars)
             // Tolerated rather than required. Everything above is the reading
             // itself and must decode; the scope is only a nicer name for it, so
             // a shape change here falls back to the kind's wording instead of
@@ -283,6 +302,8 @@ struct UsageResponse: Decodable {
     struct Window: Decodable {
         let utilization: Double
         let resetsAt: Date?
+        let usedDollars: Double?
+        let limitDollars: Double?
     }
 
     let limits: [Limit]?
@@ -294,12 +315,20 @@ struct UsageResponse: Decodable {
     /// a fallback for older responses.
     func limitWindows() -> [LimitWindow] {
         var windows = (limits ?? []).compactMap { limit -> LimitWindow? in
-            guard let resetsAt = limit.resetsAt else { return nil }
+            let metered = limit.usedDollars != nil && limit.limitDollars != nil
+            // A window with no reset time is a window we cannot render a
+            // countdown for, so it is dropped rather than shown with a bogus
+            // date — but a *balance* still says something without one, and
+            // dropping it would hide the only figure that seat has.
+            guard limit.resetsAt != nil || metered else { return nil }
+            guard let fraction = limit.fraction else { return nil }
             return LimitWindow(
                 id: limit.kind,
                 label: limit.windowLabel,
-                usedFraction: limit.percent / 100,
-                resetsAt: resetsAt
+                usedFraction: fraction,
+                resetsAt: limit.resetsAt,
+                usedDollars: limit.usedDollars,
+                limitDollars: limit.limitDollars
             )
         }
 
@@ -315,7 +344,9 @@ struct UsageResponse: Decodable {
             else { return }
             windows.append(LimitWindow(id: id, label: label,
                                        usedFraction: window.utilization / 100,
-                                       resetsAt: resetsAt))
+                                       resetsAt: resetsAt,
+                                       usedDollars: window.usedDollars,
+                                       limitDollars: window.limitDollars))
         }
         merge(fiveHour, id: "session", label: "Current session")
         merge(sevenDay, id: "weekly_all", label: "All models")

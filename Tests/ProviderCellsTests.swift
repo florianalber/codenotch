@@ -76,6 +76,18 @@ final class ProviderCellsTests: XCTestCase {
         XCTAssertEqual(cells.compactMap(\.caption), ["5h", "Weekly", "Fable"])
     }
 
+    /// A balance is not a period, so it is not named after one — and its own
+    /// label, "Spend limit", does not fit under a 44pt ring.
+    func testAMeteredWindowIsCaptionedAsSpend() {
+        let spend = LimitWindow(id: "spend_limit", label: "Spend limit",
+                                usedFraction: 0.06, usedDollars: 12.5, limitDollars: 200)
+        XCTAssertEqual(ProviderCells.caption(for: spend), "Spend")
+
+        let cells = ProviderCells.split(claude(windows: threeWindows + [spend]))
+        XCTAssertEqual(cells.compactMap(\.caption), ["5h", "Weekly", "Fable", "Spend"])
+        XCTAssertEqual(cells.last?.headlineText, "6%")
+    }
+
     /// A ring that is the only one for its account says what it is by its
     /// glyph, so it gets no caption — only the line box kept for one, so the
     /// stack stays on a single pitch.

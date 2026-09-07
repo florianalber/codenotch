@@ -65,6 +65,9 @@ enum ProviderCells {
     /// window above it. Falling back to the provider's own label keeps a kind
     /// Anthropic has not shipped yet readable rather than blank.
     static func caption(for window: LimitWindow) -> String {
+        // A balance is not a period, so naming it after one would be wrong;
+        // and its own label ("Spend limit") does not fit under a 44pt ring.
+        if window.isMetered { return "Spend" }
         switch window.id {
         case "session":    return "5h"
         case "weekly_all": return "Weekly"

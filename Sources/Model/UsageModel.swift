@@ -42,19 +42,46 @@ struct LimitWindow: Identifiable, Codable, Equatable {
     let used: Int?
     /// Nil when the provider does not say when the window rolls over.
     let resetsAt: Date?
+    /// What the window has cost, and what it may cost, where the vendor meters
+    /// it in money rather than as a share of a plan — an Enterprise seat's
+    /// spend limit is "$0.00 of $200.00", and a percentage alone throws away
+    /// the two figures the person actually has in mind.
+    let usedDollars: Double?
+    let limitDollars: Double?
 
     init(id: String, label: String, usedFraction: Double? = nil,
-         remaining: Int? = nil, used: Int? = nil, resetsAt: Date? = nil) {
+         remaining: Int? = nil, used: Int? = nil, resetsAt: Date? = nil,
+         usedDollars: Double? = nil, limitDollars: Double? = nil) {
         self.id = id
         self.label = label
         self.usedFraction = usedFraction
         self.remaining = remaining
         self.used = used
         self.resetsAt = resetsAt
+        self.usedDollars = usedDollars
+        self.limitDollars = limitDollars
+    }
+
+    /// True for a window whose limit is an amount of money.
+    var isMetered: Bool { usedDollars != nil && limitDollars != nil }
+
+    /// "0,00 $" — the vendor's figure in the reader's own number format, with
+    /// the currency it is actually billed in rather than the reader's.
+    static func money(_ amount: Double, locale: Locale = .current) -> String {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .currency
+        formatter.currencyCode = "USD"
+        formatter.locale = locale
+        return formatter.string(from: amount as NSNumber) ?? "\(amount)"
     }
 
     /// What the tooltip says on the line under the bar.
     var summary: String {
+        // Money first, where the window is metered in it: "12% Used" is true
+        // of a spend limit and useless — what is being watched is the balance.
+        if let usedDollars, let limitDollars {
+            return "\(Self.money(usedDollars)) of \(Self.money(limitDollars)) used"
+        }
         if let usedFraction {
             // Both ends of the same figure. Vendors do not agree on which to
             // show — Codex writes "87% remaining", Claude writes "% used" — so
