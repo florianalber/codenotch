@@ -84,11 +84,9 @@ struct ProviderRing: View {
             }
             .opacity(isStale ? 0.45 : 1)
 
-            // The mark is the indicator: it turns while the session works and
-            // breathes while one waits on you. Claude's own mark is a radial
-            // burst, so a turn reads as work being done — and it does not put
-            // a second moving shape inside a 44pt ring that already has a
-            // coloured arc around it.
+            // The mark is the indicator: it pulses while the session works,
+            // harder while one waits on you. Not a second moving shape inside
+            // a 44pt ring that already has a coloured arc around it.
             GlyphActivity(state: reduceMotion ? .idle : (activity?.state ?? .idle)) {
                 ProviderGlyphView(glyph: glyph)
                     .foregroundStyle(glyphTint)
@@ -148,45 +146,39 @@ private struct GlyphActivity<Content: View>: View {
 
     var body: some View {
         switch state {
-        case .working: Turning { content }
-        case .waiting: Breathing { content }
+        // Both pulses are Claude's own, taken from the stylesheet the desktop
+        // app ships: `cds-skeleton-breathe` is opacity 1 → .6 over 2s
+        // ease-in-out, and the plainer `pulse` is 1 → .4 over 1.5s. So the
+        // mark here breathes exactly the way Claude's own surfaces breathe
+        // while they are working — which is the thing being reported.
+        case .working: Breathing(trough: 0.6, period: 2.0) { content }
+        // The insistent one of the pair, because this state wants something.
+        // The colour says so too; the two together are hard to miss and still
+        // not a different vocabulary.
+        case .waiting: Breathing(trough: 0.4, period: 1.5) { content }
         case .idle:    content
         }
     }
 }
 
-/// One turn, over and over.
-private struct Turning<Content: View>: View {
-    @ViewBuilder let content: Content
-    @State private var turned = false
-
-    /// Seconds per turn. The hairline arc this replaces went round in 1.1s,
-    /// which on a whole mark rather than a 5px stroke reads as a spinner in a
-    /// hurry; slower says "working" without saying "struggling".
-    private static var period: Double { 2.4 }
-
-    var body: some View {
-        content
-            .rotationEffect(.degrees(turned ? 360 : 0))
-            .onAppear {
-                withAnimation(.linear(duration: Self.period).repeatForever(autoreverses: false)) {
-                    turned = true
-                }
-            }
-    }
-}
-
-/// Held, not turning: blocked is not progress.
+/// Opacity in, opacity out. No scaling and no rotation: the mark's own shape
+/// carries the identity of the ring, and a mark that changes size or angle
+/// stops reading as that logo for as long as it is moving.
 private struct Breathing<Content: View>: View {
+    /// How faint it gets at the bottom of the breath.
+    let trough: Double
+    /// Seconds for the whole in-and-out.
+    let period: Double
     @ViewBuilder let content: Content
     @State private var out = false
 
     var body: some View {
         content
-            .scaleEffect(out ? 0.86 : 1)
-            .opacity(out ? 0.5 : 1)
+            .opacity(out ? trough : 1)
             .onAppear {
-                withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) {
+                // Half the period each way, which is what a CSS keyframe at
+                // 50% means and what `autoreverses` gives.
+                withAnimation(.easeInOut(duration: period / 2).repeatForever(autoreverses: true)) {
                     out = true
                 }
             }
