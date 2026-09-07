@@ -17,7 +17,7 @@ final class UsageForecastTests: XCTestCase {
     /// before it would have been given back — which is the whole point.
     func testAWindowThatWillNotLast() throws {
         let runsOut = try XCTUnwrap(UsageForecast.runsOut(
-            baseline: baseline(0.10, minutesAgo: 30), window: "session",
+            baseline: baseline(0.10, minutesAgo: 30), window: "spend",
             fraction: 0.20,
             resetsAt: now.addingTimeInterval(9 * 3600),
             now: now
@@ -48,12 +48,11 @@ final class UsageForecastTests: XCTestCase {
         ))
     }
 
-    /// Standing still lasts for ever, whatever the clock says — and a
-    /// measured rate answers alone once it exists, so the window's own
-    /// average does not overrule "you have stopped".
+    /// Standing still lasts for ever, whatever the clock says. On a window
+    /// with no published length that is all there is to go on.
     func testNoBurnMeansNoForecast() {
         XCTAssertNil(UsageForecast.runsOut(
-            baseline: baseline(0.40, minutesAgo: 120), window: "session",
+            baseline: baseline(0.40, minutesAgo: 120), window: "spend",
             fraction: 0.40,
             resetsAt: now.addingTimeInterval(600),
             now: now
@@ -116,20 +115,30 @@ final class UsageForecastTests: XCTestCase {
         ))
     }
 
-    /// Once a recent rate exists it answers alone. Somebody who burned 90% of
-    /// a session in its first four hours and then stopped is not running out
-    /// of anything, though the window's own average says they are.
-    func testTheRecentRateWinsOverTheWindowsAverage() {
-        let reset = now.addingTimeInterval(3600)
-        // The average: 90% over four hours, so the last 10% goes in 27 minutes
-        // — comfortably before the reset.
-        XCTAssertNotNil(UsageForecast.runsOut(
-            baseline: nil, window: "session", fraction: 0.9, resetsAt: reset, now: now
-        ))
-        // The same reading, with half an hour of measured stillness behind it.
+    /// The reported case: on the live account the last quarter of an hour had
+    /// been quiet, so a rate measured across it read 13.7%/h against the
+    /// window's own 23.3%/h — and the ring stayed green on a session that was
+    /// an hour short. Where the length is known the average decides, and a
+    /// recent lull does not talk it out of the warning.
+    func testALullDoesNotTalkTheWarningAway() throws {
+        // 24% of a five-hour session, an hour in: 23.3%/h, spent 50 minutes
+        // early. The baseline says only 4% went in the last 17 minutes.
+        let reset = now.addingTimeInterval(4 * 3600)
+        let quiet = UsagePace(fraction: 0.20,
+                              takenAt: now.addingTimeInterval(-17.5 * 60),
+                              resetsAt: reset)
+        XCTAssertNotNil(try? XCTUnwrap(UsageForecast.runsOut(
+            baseline: quiet, window: "session", fraction: 0.24, resetsAt: reset, now: now
+        )))
+    }
+
+    /// And it clears itself as the quiet goes on, rather than snapping between
+    /// colours: the same 24%, four hours into the window, is a quarter of the
+    /// rate and lasts.
+    func testAWarningClearsAsTheQuietGoesOn() {
         XCTAssertNil(UsageForecast.runsOut(
-            baseline: baseline(0.9, minutesAgo: 30), window: "session",
-            fraction: 0.9, resetsAt: reset, now: now
+            baseline: nil, window: "session", fraction: 0.24,
+            resetsAt: now.addingTimeInterval(3600), now: now
         ))
     }
 

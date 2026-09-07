@@ -108,36 +108,47 @@ enum UsageForecast {
 
     /// Fraction of the window spent per second.
     ///
-    /// Two sources, in order of what they can say. A baseline that has stood
-    /// long enough measures the *recent* speed, which is what "at this rate"
-    /// means and what a window's own average cannot see — someone who burned
-    /// half a session in ten minutes and then went to lunch is not running out
-    /// of anything. So once there is one, it answers alone, including when its
-    /// answer is "you have stopped".
+    /// The window's own average, wherever the plan fixes its length: what is
+    /// gone, over how long the window has been open.
     ///
-    /// Until then the window's own average carries it: what is gone, over how
-    /// long the window has been open. That needs no history at all, so a fresh
-    /// launch — or a window that has just rolled — is not blind for the first
-    /// ten minutes.
+    /// Preferred over a rate measured between two recent readings, which was
+    /// the first thing tried here and is wrong for this job. A colour that has
+    /// to mean something at a glance must not flicker, and a rate taken over
+    /// the last ten minutes of a bursty workload swings from "idle" to "twice
+    /// what the plan allows" between one poll and the next. Measured live it
+    /// read 13.7%/h against the window's own 23.3%/h on the same reading,
+    /// purely because the previous quarter of an hour happened to be quiet —
+    /// and the ring stayed green on a session that was an hour short.
+    ///
+    /// The average is also the figure a person works out for themselves ("24%
+    /// gone and it opened an hour ago"), and it moves smoothly: an hour of
+    /// quiet clears a warning by itself as the elapsed time grows, rather than
+    /// snapping between colours as each lull begins and ends.
     private static func rate(baseline: UsagePace?, window id: String, fraction: Double,
                              resetsAt: Date, now: Date) -> Double? {
-        if let baseline, now.timeIntervalSince(baseline.takenAt) >= minimumSpan {
-            let burned = fraction - baseline.fraction
-            guard burned > 0 else { return nil }   // standing still lasts for ever
-            return burned / now.timeIntervalSince(baseline.takenAt)
+        if let length = length(ofWindow: id) {
+            guard fraction > 0 else { return nil }
+            // The window opened one length before it closes, so this is how far
+            // into it we are. Clamped: a reset time that has slipped forward
+            // would otherwise report a window as *not yet open*.
+            let elapsed = min(length, length - resetsAt.timeIntervalSince(now))
+            // 1% in the first minute of five hours projects to running out in
+            // ninety, so every session would go amber on its first request.
+            // Proportional as well, so a weekly window is not judged on its
+            // first hour either. Below the floor this says nothing at all
+            // rather than falling back to a measured rate, which is just as
+            // jittery that early and for the same reason.
+            guard elapsed >= max(minimumSpan, length * 0.05) else { return nil }
+            return fraction / elapsed
         }
 
-        guard fraction > 0, let length = length(ofWindow: id) else { return nil }
-        // The window opened one length before it closes, so this is how far
-        // into it we are. Clamped: a reset time that has slipped forward would
-        // otherwise report a window as *not yet open*.
-        let elapsed = min(length, length - resetsAt.timeIntervalSince(now))
-        // The same guard the measured rate has, and for the same reason: 1% in
-        // the first minute of a five-hour window projects to running out in
-        // ninety minutes, and every session would go amber on its first
-        // request. Proportional as well, so a weekly window is not judged on
-        // its first ten minutes either.
-        guard elapsed >= max(minimumSpan, length * 0.05) else { return nil }
-        return fraction / elapsed
+        // No published length, so there is nothing to average over: a spend
+        // limit's balance is all there is. Two of our own readings are then
+        // the only route to a rate at all.
+        guard let baseline, now.timeIntervalSince(baseline.takenAt) >= minimumSpan
+        else { return nil }
+        let burned = fraction - baseline.fraction
+        guard burned > 0 else { return nil }   // standing still lasts for ever
+        return burned / now.timeIntervalSince(baseline.takenAt)
     }
 }
