@@ -84,15 +84,27 @@ struct ProviderRing: View {
             }
             .opacity(isStale ? 0.45 : 1)
 
-            ProviderGlyphView(glyph: glyph)
-                .foregroundStyle(glyphTint)
-                .opacity(glyphOpacity)
-                // A mark that snaps to a new colour reads as a glitch; the same
-                // easing the reading itself uses makes it a state changing.
-                .animation(NotchMotion.reading, value: glyphTint)
-                .animation(NotchMotion.reading, value: glyphOpacity)
+            // The mark is the indicator: it turns while the session works and
+            // breathes while one waits on you. Claude's own mark is a radial
+            // burst, so a turn reads as work being done — and it does not put
+            // a second moving shape inside a 44pt ring that already has a
+            // coloured arc around it.
+            GlyphActivity(state: reduceMotion ? .idle : (activity?.state ?? .idle)) {
+                ProviderGlyphView(glyph: glyph)
+                    .foregroundStyle(glyphTint)
+                    .opacity(glyphOpacity)
+                    // A mark that snaps to a new colour reads as a glitch; the
+                    // same easing the reading itself uses makes it a state
+                    // changing.
+                    .animation(NotchMotion.reading, value: glyphTint)
+                    .animation(NotchMotion.reading, value: glyphOpacity)
+            }
 
-            if let activity, activity.state != .idle {
+            // Reduce Motion keeps the arc that used to carry this. It says the
+            // same two things with nothing moving — three quarters of a ring
+            // for working, a whole one for waiting — which a mark that is
+            // simply *not turning* cannot say at all.
+            if reduceMotion, let activity, activity.state != .idle {
                 ActivityArc(summary: activity)
             }
         }
@@ -122,8 +134,68 @@ struct ProviderRing: View {
     }
 }
 
-/// The inner indicator: a short arc that spins while work is happening, and a
-/// full pulsing ring when something is blocked waiting on you.
+/// The provider's mark, saying what its sessions are doing.
+///
+/// Why the animation lives in a *branch* rather than behind a flag: a
+/// `repeatForever` animation does not stop when the value driving it is set
+/// back — and if that value is the one it is already heading for, nothing
+/// changes and it simply keeps going. The refresh spin above and `ActivityArc`
+/// below are each commented for the same trap. A branch that stops existing
+/// takes its animation with it, which is the one cancellation that is reliable.
+private struct GlyphActivity<Content: View>: View {
+    let state: ActivitySummary.State
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        switch state {
+        case .working: Turning { content }
+        case .waiting: Breathing { content }
+        case .idle:    content
+        }
+    }
+}
+
+/// One turn, over and over.
+private struct Turning<Content: View>: View {
+    @ViewBuilder let content: Content
+    @State private var turned = false
+
+    /// Seconds per turn. The hairline arc this replaces went round in 1.1s,
+    /// which on a whole mark rather than a 5px stroke reads as a spinner in a
+    /// hurry; slower says "working" without saying "struggling".
+    private static var period: Double { 2.4 }
+
+    var body: some View {
+        content
+            .rotationEffect(.degrees(turned ? 360 : 0))
+            .onAppear {
+                withAnimation(.linear(duration: Self.period).repeatForever(autoreverses: false)) {
+                    turned = true
+                }
+            }
+    }
+}
+
+/// Held, not turning: blocked is not progress.
+private struct Breathing<Content: View>: View {
+    @ViewBuilder let content: Content
+    @State private var out = false
+
+    var body: some View {
+        content
+            .scaleEffect(out ? 0.86 : 1)
+            .opacity(out ? 0.5 : 1)
+            .onAppear {
+                withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) {
+                    out = true
+                }
+            }
+    }
+}
+
+/// The inner indicator the mark's own movement replaced, kept for Reduce
+/// Motion: a static three-quarter arc while work is happening, and a whole ring
+/// when something is blocked waiting on you.
 private struct ActivityArc: View {
     let summary: ActivitySummary
 
