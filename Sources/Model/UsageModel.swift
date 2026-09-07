@@ -93,9 +93,10 @@ struct UsageBlock: Equatable {
         let formatter = ResetCopy.formatter(for: calendar)
         // The same clock the vendor's own banner uses — "4:13 PM" — rather
         // than a countdown, because that is what you are waiting for.
+        let time = ResetCopy.timePattern()
         formatter.dateFormat = ResetCopy.daysApart(from: now, to: resetsAt,
                                                    calendar: calendar) >= 1
-            ? "E h:mm a" : "h:mm a"
+            ? "E \(time)" : time
         return "\(reason) until \(formatter.string(from: resetsAt))"
     }
 }
@@ -115,6 +116,33 @@ struct ProviderSnapshot: Identifiable, Equatable {
     /// Set when something is blocked right now. Deliberately separate from the
     /// windows: it is not a measurement, it is a door being shut.
     var block: UsageBlock?
+    /// Whether this cell is the one that carries the account's live sessions.
+    ///
+    /// False only for the extra cells `ProviderCells` makes when one account is
+    /// drawn as several rings: the sessions belong to the account, so they show
+    /// on one of its rings rather than on all of them.
+    var showsActivity: Bool = true
+    /// The short name drawn under the percentage — "5h", "Weekly", "Fable".
+    ///
+    /// Set only where a ring cannot say for itself what it measures: three
+    /// Claude rings carry the same glyph, so without it the only way to tell
+    /// the session from the weekly is to hover. Nil elsewhere, where the glyph
+    /// already names the one thing the ring means.
+    var caption: String? = nil
+
+    /// The separator between an account and the limit window a cell was split
+    /// off for. Not legal in either half, so the two never run together.
+    static let cellSeparator: Character = "#"
+
+    /// The account this cell belongs to.
+    ///
+    /// Identical to `id` for every provider drawn as a single ring. Where one
+    /// account is drawn as several — Claude, a ring per limit window — the cell
+    /// ids differ but the *account* is what live sessions, an in-flight fetch,
+    /// a refresh click and the archive are all keyed by.
+    var providerID: String {
+        id.split(separator: Self.cellSeparator, maxSplits: 1).first.map(String.init) ?? id
+    }
 
     /// The number on the cell: the provider's declared primary window — for
     /// Claude, the current session.
@@ -152,12 +180,12 @@ struct ProviderSnapshot: Identifiable, Equatable {
     /// Signing in means something different per provider, so the prompt has to
     /// say which door to knock on.
     private var authPrompt: String {
-        switch id {
+        switch providerID {
         case "claude":     return "Sign in to Claude Code to read your usage"
         // A profile is signed in by running Claude Code against its directory,
         // which is worth saying: plain `claude` signs the default one in.
-        case _ where ClaudeProfile.isClaude(providerID: id):
-            let slug = ClaudeProfile.slug(fromProviderID: id) ?? ""
+        case _ where ClaudeProfile.isClaude(providerID: providerID):
+            let slug = ClaudeProfile.slug(fromProviderID: providerID) ?? ""
             return "Sign in to Claude Code in ~/.claude-\(slug) to read your usage"
         case "cursor":     return "Sign in to Cursor in the editor"
         case "codex":      return "Sign in to Codex to read your usage"

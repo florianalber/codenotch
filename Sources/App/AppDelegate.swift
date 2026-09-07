@@ -43,7 +43,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // `CODENOTCH_DEMO=1` puts the design frame's three providers on screen
         // with its numbers, for screenshots and for eyeballing the layout.
         if ProcessInfo.processInfo.environment["CODENOTCH_DEMO"] == "1" {
-            controller.model.snapshots = Fixtures.snapshots()
+            controller.model.snapshots = ProviderCells.cells(for: Fixtures.snapshots())
         } else {
             // Nothing needs a browser session at the moment. `WebSessionProvider`
             // and `Sites.perplexity` are kept: they are the working pattern for a
@@ -155,7 +155,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 .receive(on: RunLoop.main)
                 .sink { [weak controller] snapshots in
                     withAnimation(NotchMotion.unfold) {
-                        controller?.model.snapshots = snapshots
+                        controller?.model.snapshots = ProviderCells.cells(for: snapshots)
                     }
                     controller?.model.now = Date()
                 }

@@ -20,6 +20,9 @@ struct ProviderRing: View {
     var activity: ActivitySummary?
     /// A fetch this cell asked for, in flight.
     var isRefreshing: Bool = false
+    /// The clock the "how long has it been waiting" step is measured against.
+    /// Passed in rather than read here so it ticks with the rest of the notch.
+    var now: Date = Date()
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var spin: Double = 0
@@ -29,11 +32,33 @@ struct ProviderRing: View {
     }
     private var sweep: CGFloat { CGFloat(min(max(usedFraction ?? 0, 0), 1)) }
 
+    /// Yellow while a session waits on you, orange once it has waited a while,
+    /// white the rest of the time — see `ActivitySummary.Attention`.
+    private var glyphTint: Color { activity?.glyphTint(now: now) ?? Palette.textPrimary }
+
+    /// Whether the mark is currently asking for something.
+    private var isAsking: Bool { activity?.attention(now: now) != .none && activity != nil }
+
+    /// How dimmed the mark is.
+    ///
+    /// A stale reading and a spent limit each dim it, and together they
+    /// compound — that is the existing behaviour and it is right: both say the
+    /// ring is not worth acting on. A waiting session overrules both. It is
+    /// known first-hand rather than fetched, so an old percentage says nothing
+    /// about it, and a mark faded to a sixth of its strength is not a mark that
+    /// can carry a colour at all.
+    private var glyphOpacity: Double {
+        guard !isAsking else { return 1 }
+        return (band == .exhausted ? 0.35 : 1) * (isStale ? 0.45 : 1)
+    }
+
     var body: some View {
         ZStack {
-            // Dimming applies to the usage reading only. Whether Claude is
-            // working right now is known first-hand and stays at full strength
-            // even when the percentage behind it has gone stale.
+            // Dimming applies to the usage reading only — the track and the
+            // arc. Whether Claude is working, or waiting on you, is known
+            // first-hand and stays at full strength even when the percentage
+            // behind it has gone stale, so both the mark and the activity arc
+            // sit outside this group.
             ZStack {
                 Circle()
                     .strokeBorder(Palette.ringTrack, lineWidth: NotchLayout.trackStroke)
@@ -56,13 +81,16 @@ struct ProviderRing: View {
                         .animation(NotchMotion.reading, value: sweep)
                         .animation(NotchMotion.reading, value: band)
                 }
-
-                ProviderGlyphView(glyph: glyph)
-                    .foregroundStyle(Palette.textPrimary)
-                    // A spent limit dims its glyph so the ring reads as "waiting".
-                    .opacity(band == .exhausted ? 0.35 : 1)
             }
             .opacity(isStale ? 0.45 : 1)
+
+            ProviderGlyphView(glyph: glyph)
+                .foregroundStyle(glyphTint)
+                .opacity(glyphOpacity)
+                // A mark that snaps to a new colour reads as a glitch; the same
+                // easing the reading itself uses makes it a state changing.
+                .animation(NotchMotion.reading, value: glyphTint)
+                .animation(NotchMotion.reading, value: glyphOpacity)
 
             if let activity, activity.state != .idle {
                 ActivityArc(summary: activity)
@@ -159,6 +187,7 @@ struct ProviderCell: View {
     let snapshot: ProviderSnapshot
     var activity: ActivitySummary?
     var isRefreshing: Bool = false
+    var now: Date = Date()
 
     /// A dash, not "0%": nothing read is not the same as nothing used.
     private var percentText: String {
@@ -166,14 +195,18 @@ struct ProviderCell: View {
     }
 
     var body: some View {
-        VStack(spacing: NotchLayout.ringLabelGap) {
+        // Spaced by explicit padding rather than by the stack: the two labels
+        // sit at different distances, and the caption's own line box has to be
+        // reserved whether or not there is a caption to put in it.
+        VStack(spacing: 0) {
             ProviderRing(
                 usedFraction: snapshot.hasReading ? snapshot.ringFraction : nil,
                 glyph: snapshot.glyph,
                 isStale: snapshot.status.isStale || !snapshot.hasReading,
                 isBlocked: snapshot.block != nil,
                 activity: activity,
-                isRefreshing: isRefreshing
+                isRefreshing: isRefreshing,
+                now: now
             )
             Text(percentText)
                 .font(Typography.percent)
@@ -186,6 +219,17 @@ struct ProviderCell: View {
                 .frame(height: NotchLayout.percentLineHeight)
                 .contentTransition(.numericText())
                 .animation(NotchMotion.reading, value: percentText)
+                .padding(.top, NotchLayout.ringLabelGap)
+
+            // Empty on a ring that needs no caption. Still laid out, so every
+            // ring in the stack sits on the same pitch — see
+            // `NotchLayout.captionLineHeight`.
+            Text(snapshot.caption ?? "")
+                .font(Typography.ringCaption)
+                .foregroundStyle(Palette.textSecondary)
+                .fixedSize(horizontal: true, vertical: false)
+                .frame(height: NotchLayout.captionLineHeight)
+                .padding(.top, NotchLayout.captionGap)
         }
         .frame(height: NotchLayout.cellExtent)
     }

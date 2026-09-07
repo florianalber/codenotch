@@ -45,6 +45,14 @@ final class ResetCopyTests: XCTestCase {
         XCTAssertFalse(text.contains("."), "expected no full stop in \(text)")
     }
 
+    /// The hour field follows the locale's own clock, so a 24-hour region
+    /// never sees "4:50 PM" — and a 12-hour one keeps it.
+    func testTheClockFollowsTheLocale() {
+        XCTAssertEqual(ResetCopy.timePattern(locale: Locale(identifier: "de_DE")), "HH:mm")
+        XCTAssertEqual(ResetCopy.timePattern(locale: Locale(identifier: "en_GB")), "HH:mm")
+        XCTAssertEqual(ResetCopy.timePattern(locale: Locale(identifier: "en_US")), "h:mm a")
+    }
+
     func testPastResetsReadAsResetting() {
         XCTAssertEqual(ResetCopy.text(for: now.addingTimeInterval(-5), now: now), "Resetting…")
     }

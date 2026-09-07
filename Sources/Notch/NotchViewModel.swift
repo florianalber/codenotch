@@ -255,6 +255,21 @@ final class NotchViewModel: ObservableObject {
         ActivitySummary(sessions: sessions[providerID] ?? [])
     }
 
+    /// The sessions a *cell* shows. Where one account is drawn as several rings
+    /// they hang off one of them, so the others answer nil — and the tooltip
+    /// they open is sized for what it actually lists.
+    func activity(for snapshot: ProviderSnapshot) -> ActivitySummary? {
+        guard snapshot.showsActivity else { return nil }
+        return activity(for: snapshot.providerID)
+    }
+
+    /// Whether the account behind this cell has a fetch in flight. Keyed by the
+    /// account, because that is what is being fetched — so every ring of one
+    /// account turns together.
+    func isRefreshing(_ snapshot: ProviderSnapshot) -> Bool {
+        refreshing.contains(snapshot.providerID)
+    }
+
     var hoveredSnapshot: ProviderSnapshot? {
         guard let hoveredIndex, snapshots.indices.contains(hoveredIndex) else { return nil }
         return snapshots[hoveredIndex]

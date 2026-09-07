@@ -82,6 +82,46 @@ final class UsageResponseTests: XCTestCase {
         XCTAssertEqual(windows.map(\.label), ["Current session", "All models"])
     }
 
+    /// The reported case: the third ring read "Scoped", because that is all the
+    /// kind says. The model is in the entry's own scope, and is what both the
+    /// ring's caption and the tooltip row should show.
+    func testTheScopedWindowIsNamedAfterItsModel() throws {
+        let json = """
+        { "limits": [
+            { "kind": "session", "percent": 52, "resets_at": "2026-08-28T09:50:00.316290+00:00",
+              "scope": null },
+            { "kind": "weekly_scoped", "percent": 61,
+              "resets_at": "2026-09-02T17:00:00.316321+00:00",
+              "scope": { "model": { "display_name": "Fable", "id": "claude-fable-5-1" } } } ] }
+        """
+        let windows = try decode(json).limitWindows()
+        XCTAssertEqual(windows.map(\.label), ["Current session", "Fable"])
+        // The id stays the API's own kind: it keys the archive and the cell.
+        XCTAssertEqual(windows.map(\.id), ["session", "weekly_scoped"])
+    }
+
+    /// Named by the kind when the response names no model — honest, if terse.
+    func testAnUnscopedModelWindowFallsBackToTheKind() throws {
+        let json = """
+        { "limits": [ { "kind": "weekly_scoped", "percent": 61,
+                        "resets_at": "2026-09-02T17:00:00.316321+00:00", "scope": null } ] }
+        """
+        XCTAssertEqual(try decode(json).limitWindows().map(\.label), ["Scoped"])
+    }
+
+    /// The scope is a nicer name for a reading, not the reading. If its shape
+    /// changes the percentage still has to arrive.
+    func testAMalformedScopeDoesNotCostTheReading() throws {
+        let json = """
+        { "limits": [ { "kind": "weekly_scoped", "percent": 61,
+                        "resets_at": "2026-09-02T17:00:00.316321+00:00",
+                        "scope": "fable" } ] }
+        """
+        let windows = try decode(json).limitWindows()
+        XCTAssertEqual(windows.first?.usedFraction ?? -1, 0.61, accuracy: 0.0001)
+        XCTAssertEqual(windows.first?.label, "Scoped")
+    }
+
     func testUnknownKindsGetAReadableLabel() {
         XCTAssertEqual(UsageResponse.label(forKind: "weekly_opus"), "Opus")
         XCTAssertEqual(UsageResponse.label(forKind: "weekly_cowork"), "Cowork")

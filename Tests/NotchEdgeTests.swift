@@ -595,10 +595,13 @@ final class SingleCellBalanceTests: XCTestCase {
         }
     }
 
-    /// And the side edges keep the frame's own asymmetry, untouched.
+    /// And the side edges keep the frame's own asymmetry, untouched — the foot
+    /// measured from the *lower* of the two labels, since a ring now carries a
+    /// caption under its percentage.
     func testTheSideEdgesKeepTheFramesUnevenPadding() {
         XCTAssertEqual(NotchLayout.padStart(for: .right), Design.px(69.5), accuracy: 0.001)
-        XCTAssertEqual(NotchLayout.padEnd(for: .right), Design.px(50.1), accuracy: 0.001)
+        XCTAssertEqual(NotchLayout.padEnd(for: .right) - NotchLayout.captionBlock,
+                       Design.px(50.1), accuracy: 0.001)
         XCTAssertNotEqual(NotchLayout.padStart(for: .right), NotchLayout.padEnd(for: .right))
     }
 

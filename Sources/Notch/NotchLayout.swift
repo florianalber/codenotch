@@ -38,8 +38,22 @@ enum NotchLayout {
     static let bezelFillet  = Design.px(28)
     static let cornerRadius = Design.px(78.8)
     static let padTop       = Design.px(69.5)   // body top -> first ring
-    static let padBottom    = Design.px(50.1)   // last label -> body bottom
-    static let cellSpacing  = Design.px(83.5)   // label bottom -> next ring top
+    /// Last label -> body bottom, 50.1px in the frame — plus the caption block,
+    /// because the last label is now two lines and the foot has to clear the
+    /// lower one. Grows the shape once, not once per cell.
+    static var padBottom: CGFloat { Design.px(50.1) + captionBlock }
+    /// Label bottom -> next ring top, 83.5px in the frame, less the caption
+    /// block.
+    ///
+    /// The caption is fitted into the clear space the frame already leaves
+    /// between cells rather than added on top of it, because what the frame
+    /// fixes is the *rhythm*: 275px from one ring's centre to the next, which
+    /// `cellPitch` still is to the point. Adding the caption to the pitch
+    /// instead pushed every ring after the first off that rhythm and made a
+    /// four-ring notch a sixth longer — which on a 13-inch display came
+    /// straight out of the tooltip's own height budget and cost it half its
+    /// session rows.
+    static var cellSpacing: CGFloat { Design.px(83.5) - captionBlock }
 
     // The resting pill. Not in the design frame — it is the notch folded away,
     // sized to read as a deliberate handle rather than a sliver of chrome.
@@ -145,6 +159,20 @@ enum NotchLayout {
         return ceil(font.ascender - font.descender + font.leading)
     }()
 
+    /// The caption's line box, and the gap above it.
+    ///
+    /// Reserved on **every** cell, not only on the ones that draw a caption.
+    /// The stack is one grid: a taller cell would move every ring after it off
+    /// the pitch that the hover bands, the tooltip tails and `ringCenter` are
+    /// all measured on, and the rings would no longer be evenly spaced. An
+    /// unlabelled ring spends it as clear space instead.
+    static let captionGap = Design.px(9)
+    static let captionLineHeight: CGFloat = lineHeight(
+        NSFont.systemFont(ofSize: Design.fontSize(capPixels: 16), weight: .medium)
+    )
+    /// What a caption costs a cell, gap included.
+    static var captionBlock: CGFloat { captionGap + captionLineHeight }
+
     static let cardTitleLineHeight: CGFloat = lineHeight(
         NSFont.systemFont(ofSize: Design.fontSize(capPixels: 26), weight: .semibold)
     )
@@ -186,8 +214,10 @@ enum NotchLayout {
         ceil(font.ascender - font.descender + font.leading)
     }
 
-    /// Ring plus its percent label.
-    static var cellExtent: CGFloat { ringDiameter + ringLabelGap + percentLineHeight }
+    /// Ring, percent label, and the caption line under it.
+    static var cellExtent: CGFloat {
+        ringDiameter + ringLabelGap + percentLineHeight + captionGap + captionLineHeight
+    }
 
     /// What one cell claims along the stack.
     ///

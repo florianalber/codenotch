@@ -241,6 +241,44 @@ struct UsageResponse: Decodable {
         let kind: String
         let percent: Double
         let resetsAt: Date?
+        /// What the window is scoped to, where it is scoped to anything.
+        ///
+        /// The model-specific weekly window comes back as `weekly_scoped` for
+        /// *every* model, so the kind alone can only ever say "Scoped". The
+        /// model it actually meters is named here and nowhere else — which is
+        /// also why this is read rather than the model being hardcoded: the
+        /// window follows whichever model the plan scopes, and has already been
+        /// Opus once.
+        let scope: Scope?
+
+        /// The window's own name: the model where the response names one, the
+        /// kind's own wording otherwise.
+        var windowLabel: String {
+            let named = scope?.model?.displayName?.trimmingCharacters(in: .whitespaces)
+            if let named, !named.isEmpty { return named }
+            return UsageResponse.label(forKind: kind)
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case kind, percent, resetsAt, scope
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            kind = try container.decode(String.self, forKey: .kind)
+            percent = try container.decode(Double.self, forKey: .percent)
+            resetsAt = try container.decodeIfPresent(Date.self, forKey: .resetsAt)
+            // Tolerated rather than required. Everything above is the reading
+            // itself and must decode; the scope is only a nicer name for it, so
+            // a shape change here falls back to the kind's wording instead of
+            // costing the whole response.
+            scope = try? container.decodeIfPresent(Scope.self, forKey: .scope)
+        }
+    }
+
+    struct Scope: Decodable {
+        struct Model: Decodable { let displayName: String? }
+        let model: Model?
     }
     struct Window: Decodable {
         let utilization: Double
@@ -259,7 +297,7 @@ struct UsageResponse: Decodable {
             guard let resetsAt = limit.resetsAt else { return nil }
             return LimitWindow(
                 id: limit.kind,
-                label: UsageResponse.label(forKind: limit.kind),
+                label: limit.windowLabel,
                 usedFraction: limit.percent / 100,
                 resetsAt: resetsAt
             )
@@ -292,6 +330,9 @@ struct UsageResponse: Decodable {
         case "weekly_all":    return "All models"
         case "weekly_opus":   return "Opus"
         case "weekly_sonnet": return "Sonnet"
+        // Only reached when the response names no model for the window, which
+        // is the one case where there is nothing better to call it.
+        case "weekly_scoped", "scoped": return "Scoped"
         default:
             return kind
                 .replacingOccurrences(of: "weekly_", with: "")

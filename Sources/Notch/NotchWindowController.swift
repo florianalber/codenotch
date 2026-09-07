@@ -214,7 +214,7 @@ final class NotchWindowController {
         let snapshot = model.snapshots[index]
         let cardHeight = NotchLayout.cardHeight(
             windowCount: snapshot.windows.count,
-            sessionCount: model.activity(for: snapshot.id)?.sessions.count ?? 0,
+            sessionCount: model.activity(for: snapshot)?.sessions.count ?? 0,
             sessionCap: model.sessionCap,
             statusMessage: snapshot.statusMessage,
             blockMessage: snapshot.block?.summary(now: model.now)
@@ -415,7 +415,9 @@ final class NotchWindowController {
         if notchRect.contains(local),
            let index = cellIndex(along: placement.along(of: local)),
            model.snapshots.indices.contains(index) {
-            onRefreshProvider?(model.snapshots[index].id)
+            // The account, not the cell: clicking any of Claude's rings
+            // refetches the one reading all of them come from.
+            onRefreshProvider?(model.snapshots[index].providerID)
             return
         }
         togglePinned()

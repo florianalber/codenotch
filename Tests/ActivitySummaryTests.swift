@@ -36,6 +36,82 @@ final class ActivitySummaryTests: XCTestCase {
     }
 }
 
+/// Colour on the provider's mark has exactly one meaning: a session is waiting
+/// on you. Two steps say for how long.
+final class GlyphAttentionTests: XCTestCase {
+    private let now = Date(timeIntervalSince1970: 1_800_000_000)
+
+    private func session(_ state: AgentSession.State,
+                         waitingFor seconds: TimeInterval = 0,
+                         name: String = "s") -> AgentSession {
+        AgentSession(id: name, name: name, detail: "Terminal · \(name)",
+                     state: state, waitingFor: nil,
+                     since: now.addingTimeInterval(-seconds))
+    }
+
+    private func summary(_ sessions: [AgentSession]) -> ActivitySummary {
+        ActivitySummary(sessions: sessions)!
+    }
+
+    /// Busy is not asking for anything, so the mark keeps its own colour. The
+    /// arc inside the ring is what turns for it.
+    func testWorkingLeavesTheMarkAlone() {
+        let busy = summary([session(.busy, waitingFor: 3600)])
+        XCTAssertEqual(busy.attention(now: now), .none)
+        XCTAssertNil(busy.glyphTint(now: now))
+
+        let idle = summary([session(.idle, waitingFor: 3600)])
+        XCTAssertEqual(idle.attention(now: now), .none)
+        XCTAssertNil(idle.glyphTint(now: now))
+    }
+
+    func testWaitingIsYellowUntilItIsOverdue() {
+        let fresh = summary([session(.waiting, waitingFor: 30)])
+        XCTAssertEqual(fresh.attention(now: now), .waiting)
+        XCTAssertEqual(fresh.glyphTint(now: now), Palette.watch)
+
+        let overdue = summary([session(.waiting, waitingFor: 5 * 60)])
+        XCTAssertEqual(overdue.attention(now: now), .overdue)
+        XCTAssertEqual(overdue.glyphTint(now: now), Palette.critical)
+    }
+
+    /// The step is at the threshold itself, not a second past it.
+    func testTheStepIsExactlyAtTheThreshold() {
+        let justUnder = summary([session(.waiting, waitingFor: ActivitySummary.overdueAfter - 1)])
+        XCTAssertEqual(justUnder.attention(now: now), .waiting)
+        let atIt = summary([session(.waiting, waitingFor: ActivitySummary.overdueAfter)])
+        XCTAssertEqual(atIt.attention(now: now), .overdue)
+    }
+
+    /// A second session blocking behind the first must not make the pair look
+    /// freshly blocked — the one kept longest is the one being kept.
+    func testTheLongestWaitWins() {
+        let pair = summary([session(.waiting, waitingFor: 10, name: "new"),
+                            session(.waiting, waitingFor: 9 * 60, name: "old")])
+        XCTAssertEqual(pair.waitingSince, self.now.addingTimeInterval(-9 * 60))
+        XCTAssertEqual(pair.attention(now: now), .overdue)
+    }
+
+    /// And a busy session alongside a waiting one does not soften it: waiting
+    /// already outranks busy, and the clock is read from the waiting one.
+    func testBusyAlongsideWaitingStillAsks() {
+        let mixed = summary([session(.busy, waitingFor: 0, name: "busy"),
+                             session(.waiting, waitingFor: 4 * 60, name: "blocked")])
+        XCTAssertEqual(mixed.attention(now: now), .overdue)
+        XCTAssertEqual(mixed.glyphTint(now: now), Palette.critical)
+    }
+
+    /// The two steps are the two colours the usage ring already owns, which is
+    /// only safe because green never appears here: colour on the mark cannot be
+    /// read as a point on the usage scale if it only ever has one cause.
+    func testTheMarkNeverWearsTheAmpleColour() {
+        for seconds in [0.0, 30, 119, 120, 3600] {
+            let tint = summary([session(.waiting, waitingFor: seconds)]).glyphTint(now: now)
+            XCTAssertNotEqual(tint, Palette.ample, "\(seconds)s")
+        }
+    }
+}
+
 /// The instant every fixture's `unfinishedRunAt` names. At file scope so it can
 /// serve as a default argument, which a stored property cannot.
 private let runAt = Date(timeIntervalSince1970: 1787981829.823)

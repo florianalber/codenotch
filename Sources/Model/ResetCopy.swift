@@ -1,7 +1,7 @@
 import Foundation
 
-/// "Resets in 51 min" under an hour, "Resets Thu 12:00 AM" within the week,
-/// "Resets Sep 28" beyond it.
+/// "Resets in 51 min" under an hour, "Resets Thu 12:00 AM" (or "Resets Do
+/// 00:00", on a 24-hour locale) within the week, "Resets Sep 28" beyond it.
 enum ResetCopy {
     static func text(for resetsAt: Date, now: Date = Date(), calendar: Calendar = .current) -> String {
         let seconds = resetsAt.timeIntervalSince(now)
@@ -29,11 +29,25 @@ enum ResetCopy {
         }
 
         // A literal pattern rather than a localised template: the weekday and
-        // AM/PM still come from the locale, but the separator stays a colon.
-        // The template form yields "4.50 PM" in some regions, and both the
-        // design frame and Claude's own usage panel write "4:50 PM".
-        formatter.dateFormat = "E h:mm a"
+        // the clock still come from the locale, but the separator stays a
+        // colon. The template form yields "4.50 PM" in some regions, and both
+        // the design frame and Claude's own usage panel write "4:50 PM".
+        formatter.dateFormat = "E \(timePattern())"
         return "Resets \(formatter.string(from: resetsAt))"
+    }
+
+    /// `h:mm a` or `HH:mm`, whichever clock the locale actually keeps.
+    ///
+    /// Hardcoding the 12-hour form printed "4:50 PM" on a Mac set to a region
+    /// that has never written the time that way — the locale was already being
+    /// honoured for the weekday name, so the hour was the one part that
+    /// disagreed with the rest of the system. Only the hour field is taken from
+    /// the locale; the colon stays pinned for the reason above.
+    static func timePattern(locale: Locale = .current) -> String {
+        // "j" is the locale's own hour field — it resolves to h, H, k or K, and
+        // carries the day-period marker only where the locale uses one.
+        let hour = DateFormatter.dateFormat(fromTemplate: "j", options: 0, locale: locale)
+        return hour?.contains("a") == true ? "h:mm a" : "HH:mm"
     }
 
     /// A formatter that renders in the given calendar's own zone.

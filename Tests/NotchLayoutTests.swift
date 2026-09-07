@@ -784,14 +784,21 @@ final class SessionCapTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(model.sessionCap(cellCount: 4), 6)
     }
 
-    /// Even the shortest display Macs ship with lists at least what the fixed
-    /// cap used to, so solving for the screen never costs anyone a row.
-    @MainActor func testTheSmallestLaptopIsNoWorseOffThanTheFixedCap() {
+    /// Even the shortest display Macs ship with list several sessions before
+    /// they have to summarise.
+    ///
+    /// One short of the old fixed cap of four, and deliberately: the caption
+    /// line under every ring costs the stack two caption blocks — one in each
+    /// cell, one at the foot — and on a 956pt display that is a session row.
+    /// The rest of the pitch is untouched, so the cost stops there. A bigger
+    /// display pays nothing: `testTheReportedCaseIsListedInFull` still lists
+    /// all six on a 1169pt one.
+    @MainActor func testTheSmallestLaptopStillListsSeveralSessions() {
         let model = NotchViewModel()
         model.edge = .right
         model.screenSize = CGSize(width: 1470, height: 956)   // 13-inch Air
         XCTAssertGreaterThanOrEqual(model.sessionCap(cellCount: 4),
-                                    NotchLayout.defaultSessionCap)
+                                    NotchLayout.defaultSessionCap - 1)
     }
 
     /// And the panel it implies still has to land on the screen.
