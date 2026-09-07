@@ -249,6 +249,25 @@ final class UsageResponseTests: XCTestCase {
         XCTAssertNil(balance.resetsAt, "the block carries no reset time")
     }
 
+    /// The ring has to *mean* the balance on a seat that reports only that.
+    /// Declaring "session" there left it showing a dash beside a tooltip full
+    /// of numbers — the window it named did not exist.
+    func testTheBalanceIsTheHeadlineWhenThereIsNoSession() throws {
+        let windows = try decode(enterprise).limitWindows()
+        XCTAssertEqual(UsageResponse.headlineID(for: windows), "spend")
+    }
+
+    /// And on a plan seat nothing moves: the session leads, and a session
+    /// merely missing from one response still shows a dash rather than
+    /// promoting the weekly into its place.
+    func testTheSessionStillLeadsWhereThereIsOne() throws {
+        XCTAssertEqual(UsageResponse.headlineID(for: try decode(live).limitWindows()), "session")
+
+        let weeklyOnly = [LimitWindow(id: "weekly_all", label: "All models", usedFraction: 0.3)]
+        XCTAssertEqual(UsageResponse.headlineID(for: weeklyOnly), "session",
+                       "a weekly percentage must not wear the session's place")
+    }
+
     /// `amber_ladder`, `nimbus_quill` and friends carry `limit_dollars` and
     /// `resets_at` and look exactly like windows. They are internal codenames
     /// whose meaning is not published, and a ring drawn from one would be a

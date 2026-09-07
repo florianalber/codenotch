@@ -130,14 +130,15 @@ actor ClaudeOAuthProvider: UsageProvider {
         }
 
         let payload = try Self.decoder.decode(UsageResponse.self, from: data)
+        let windows = payload.limitWindows()
         return ProviderSnapshot(
             id: id,
             displayName: displayName,
             glyph: glyph,
             fidelity: .official,
             status: .ok,
-            windows: payload.limitWindows(),
-            headlineID: "session"
+            windows: windows,
+            headlineID: UsageResponse.headlineID(for: windows)
         )
     }
 
@@ -393,6 +394,24 @@ struct UsageResponse: Decodable {
         if let balance = spendWindow() { windows.append(balance) }
 
         return windows.sorted(by: UsageResponse.displayOrder)
+    }
+
+    /// Which window the ring means.
+    ///
+    /// The session where there is one: that is what Claude Code's own `/usage`
+    /// leads with, and promoting another of the plan's windows into its place
+    /// would silently change what the ring is about — so where a session is
+    /// merely missing from a response, "session" stays declared and the cell
+    /// shows a dash rather than a weekly percentage wearing the session's
+    /// place.
+    ///
+    /// A credit seat is not that case. It reports no session window at all,
+    /// ever, so there is nothing to promote *over* — and declaring one anyway
+    /// left the ring showing a dash beside a card that was full of numbers.
+    static func headlineID(for windows: [LimitWindow]) -> String? {
+        if windows.contains(where: { $0.id == "session" }) { return "session" }
+        if let balance = windows.first(where: { $0.isMetered }) { return balance.id }
+        return "session"
     }
 
     /// The credit balance as a window, or nil where the seat has none.
