@@ -25,16 +25,45 @@ enum UsageForecast {
     /// landed between readings.
     static let minimumSpan: TimeInterval = 10 * 60
 
+    /// How far a window's reset time may move and still be the same window.
+    ///
+    /// The endpoint's reset time is not stable to the millisecond. Two polls a
+    /// minute apart came back with `810490799.838` and `810490799.884`, and
+    /// comparing them exactly read that 46-millisecond drift as a fresh
+    /// window — so the baseline restarted on *every* reading, its age was
+    /// always zero, and the forecast never lived long enough to be made at
+    /// all. Nothing was visibly broken; there was simply never a warning.
+    ///
+    /// A real rollover moves the reset by the whole length of the window:
+    /// hours for a session, days for a weekly. Ten minutes separates the two
+    /// with room to spare in both directions.
+    static let sameWindowTolerance: TimeInterval = 10 * 60
+
     /// The baseline to hold for the next reading.
     ///
-    /// Restarted when the window rolls — a new reset time, or a reading that
-    /// has gone *down*, which is a rollover the reset time did not announce.
+    /// Restarted when the window rolls — a reset time that has genuinely
+    /// moved, or a reading that has gone *down*, which is a rollover the reset
+    /// time did not announce.
     static func baseline(_ held: UsagePace?, fraction: Double,
                          resetsAt: Date?, now: Date) -> UsagePace {
         let fresh = UsagePace(fraction: fraction, takenAt: now, resetsAt: resetsAt)
         guard let held else { return fresh }
-        guard held.resetsAt == resetsAt, fraction >= held.fraction else { return fresh }
+        guard isSameWindow(held.resetsAt, resetsAt), fraction >= held.fraction else { return fresh }
         return held
+    }
+
+    /// Whether two reset times name the same window.
+    static func isSameWindow(_ a: Date?, _ b: Date?) -> Bool {
+        switch (a, b) {
+        case (nil, nil):
+            return true
+        case let (held?, fresh?):
+            return abs(held.timeIntervalSince(fresh)) <= sameWindowTolerance
+        default:
+            // One of them has a reset time and the other does not, which is a
+            // different shape of window rather than a moved one.
+            return false
+        }
     }
 
     /// When this window will be spent at the rate measured since the baseline,

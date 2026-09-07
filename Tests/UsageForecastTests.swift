@@ -106,6 +106,31 @@ final class UsageForecastTests: XCTestCase {
         )
     }
 
+    /// The reported bug: the endpoint's reset time drifts by milliseconds
+    /// between polls, and comparing it exactly read that as a fresh window.
+    /// The baseline then restarted on every reading, its age was always zero,
+    /// and the forecast was never made at all — with nothing visibly broken.
+    func testMillisecondDriftIsTheSameWindow() {
+        let reset = now.addingTimeInterval(4 * 3600)
+        let held = baseline(0.20, minutesAgo: 45, resetsAt: reset)
+        let drifted = reset.addingTimeInterval(0.046)   // the figures actually seen
+        XCTAssertTrue(UsageForecast.isSameWindow(reset, drifted))
+        XCTAssertEqual(
+            UsageForecast.baseline(held, fraction: 0.30, resetsAt: drifted, now: now),
+            held,
+            "a 46ms drift must not throw the measurement away"
+        )
+    }
+
+    /// And a window that has genuinely rolled moves its reset by hours, which
+    /// the tolerance must still catch.
+    func testARealRolloverIsStillNoticed() {
+        let reset = now.addingTimeInterval(600)
+        XCTAssertFalse(UsageForecast.isSameWindow(reset, reset.addingTimeInterval(5 * 3600)))
+        XCTAssertFalse(UsageForecast.isSameWindow(reset, nil))
+        XCTAssertTrue(UsageForecast.isSameWindow(nil, nil))
+    }
+
     /// A new reset time is a new window, and the old baseline says nothing
     /// about it.
     func testARolloverRestartsTheBaseline() {
