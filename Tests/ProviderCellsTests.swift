@@ -88,6 +88,20 @@ final class ProviderCellsTests: XCTestCase {
         XCTAssertEqual(cells.last?.headlineText, "6%")
     }
 
+    /// An Enterprise seat reports one window and one only, so there is nothing
+    /// to split — but the ring still needs its word: it carries the same mark
+    /// as the plan's rings, sits beside them, and belongs to a different seat.
+    func testALoneBalanceRingIsStillCaptioned() {
+        let balance = LimitWindow(id: "spend", label: "Spend limit", usedFraction: 0.01485,
+                                  usedDollars: 2.97, limitDollars: 200, currency: "USD")
+        let cells = ProviderCells.split(claude(id: "claude-enterprise", windows: [balance],
+                                               headlineID: "spend"))
+        XCTAssertEqual(cells.map(\.id), ["claude-enterprise"], "one window is already one ring")
+        XCTAssertEqual(cells.first?.caption, "Spend")
+        XCTAssertEqual(cells.first?.headlineText, "1%")
+        XCTAssertEqual(cells.first?.providerID, "claude-enterprise")
+    }
+
     /// A ring that is the only one for its account says what it is by its
     /// glyph, so it gets no caption — only the line box kept for one, so the
     /// stack stays on a single pitch.

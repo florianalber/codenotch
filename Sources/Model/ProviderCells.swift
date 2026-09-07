@@ -19,10 +19,20 @@ enum ProviderCells {
     }
 
     static func split(_ snapshot: ProviderSnapshot) -> [ProviderSnapshot] {
-        // One window is already one ring, and a provider with none has a
-        // status to show rather than a reading — splitting either would drop
-        // the cell entirely.
-        guard splitsByWindow(snapshot), snapshot.windows.count > 1 else { return [snapshot] }
+        guard splitsByWindow(snapshot) else { return [snapshot] }
+
+        // One window is already one ring, and a provider with none has a status
+        // to show rather than a reading — splitting either would drop the cell
+        // entirely. A lone *balance* still gets its caption: it carries the
+        // same mark as the plan's rings, sits beside them, and belongs to a
+        // different seat, so without a word under it there is nothing to tell
+        // them apart by.
+        guard snapshot.windows.count > 1 else {
+            guard let only = snapshot.windows.first, only.isMetered else { return [snapshot] }
+            var cell = snapshot
+            cell.caption = caption(for: only)
+            return [cell]
+        }
 
         // Which cell carries the account's live sessions. They belong to the
         // account, not to a limit window, so they go on the ring the provider

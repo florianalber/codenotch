@@ -306,9 +306,37 @@ struct UsageResponse: Decodable {
         let limitDollars: Double?
     }
 
+    /// A seat billed against credits rather than a plan: the balance and the
+    /// cap, each as an amount in minor units with its own currency.
+    ///
+    /// Deliberately read instead of the flat `extra_usage` block beside it,
+    /// which carries the same two figures without saying which currency they
+    /// are in — this one does, and an amount whose currency is assumed is a
+    /// number that reads right and means something else.
+    struct Spend: Decodable {
+        struct Amount: Decodable {
+            let amountMinor: Double?
+            let currency: String?
+            /// Decimal places, so 20000 with exponent 2 is 200.00.
+            let exponent: Int?
+
+            var value: Double? {
+                guard let amountMinor else { return nil }
+                return amountMinor / pow(10, Double(exponent ?? 2))
+            }
+        }
+
+        /// False on a seat that has no credit spending at all, where a ring
+        /// reading "0 of 0" would be an invention.
+        let enabled: Bool?
+        let used: Amount?
+        let limit: Amount?
+    }
+
     let limits: [Limit]?
     let fiveHour: Window?
     let sevenDay: Window?
+    let spend: Spend?
 
     /// `limits` is the forward-compatible shape — it grows new kinds as
     /// Anthropic adds them — so it is preferred, with the two named windows as
@@ -351,7 +379,45 @@ struct UsageResponse: Decodable {
         merge(fiveHour, id: "session", label: "Current session")
         merge(sevenDay, id: "weekly_all", label: "All models")
 
+        // An Enterprise seat reports *only* this: `limits` comes back empty and
+        // both named windows are null, so without it such a seat has no
+        // reading at all and its ring says "Waiting for the first reading…"
+        // for ever.
+        //
+        // Nothing else in the response is read, on purpose. Several top-level
+        // objects — `amber_ladder`, `nimbus_quill`, `tangelo` — carry
+        // `limit_dollars` and `resets_at` and look exactly like windows, but
+        // they are internal codenames whose meaning is not published and can
+        // change without notice. A ring drawn from one would be a number
+        // presented as a limit without anybody knowing which limit.
+        if let balance = spendWindow() { windows.append(balance) }
+
         return windows.sorted(by: UsageResponse.displayOrder)
+    }
+
+    /// The credit balance as a window, or nil where the seat has none.
+    ///
+    /// The share is the two amounts divided rather than `spend.percent`, which
+    /// is rounded to whole percent: at $2.97 of $200 that field says `1` while
+    /// the true figure is 1.485%, and the bar under the tooltip would sit
+    /// visibly left of where the numbers beside it say it should.
+    func spendWindow() -> LimitWindow? {
+        guard let spend, spend.enabled != false,
+              let used = spend.used?.value,
+              let limit = spend.limit?.value, limit > 0
+        else { return nil }
+
+        return LimitWindow(
+            id: "spend",
+            label: "Spend limit",
+            usedFraction: used / limit,
+            // No reset time: the response does not carry one for this block,
+            // and a balance still says what it says without one.
+            resetsAt: nil,
+            usedDollars: used,
+            limitDollars: limit,
+            currency: spend.limit?.currency ?? spend.used?.currency
+        )
     }
 
     /// The frame's wording, for the kinds it drew.
@@ -377,6 +443,9 @@ struct UsageResponse: Decodable {
         func rank(_ id: String) -> Int {
             if id == "session" { return 0 }
             if id == "weekly_all" { return 1 }
+            // Last: a balance is not one of the plan's periods, and on a seat
+            // that has both it is the odd one out rather than another window.
+            if id == "spend" { return 3 }
             return 2
         }
         let (ra, rb) = (rank(a.id), rank(b.id))

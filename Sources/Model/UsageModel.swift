@@ -48,10 +48,15 @@ struct LimitWindow: Identifiable, Codable, Equatable {
     /// the two figures the person actually has in mind.
     let usedDollars: Double?
     let limitDollars: Double?
+    /// What those two are denominated in, as the vendor states it. Not assumed:
+    /// an amount whose currency is guessed is a number that reads right and
+    /// means something else.
+    let currency: String?
 
     init(id: String, label: String, usedFraction: Double? = nil,
          remaining: Int? = nil, used: Int? = nil, resetsAt: Date? = nil,
-         usedDollars: Double? = nil, limitDollars: Double? = nil) {
+         usedDollars: Double? = nil, limitDollars: Double? = nil,
+         currency: String? = nil) {
         self.id = id
         self.label = label
         self.usedFraction = usedFraction
@@ -60,6 +65,7 @@ struct LimitWindow: Identifiable, Codable, Equatable {
         self.resetsAt = resetsAt
         self.usedDollars = usedDollars
         self.limitDollars = limitDollars
+        self.currency = currency
     }
 
     /// True for a window whose limit is an amount of money.
@@ -67,10 +73,11 @@ struct LimitWindow: Identifiable, Codable, Equatable {
 
     /// "0,00 $" — the vendor's figure in the reader's own number format, with
     /// the currency it is actually billed in rather than the reader's.
-    static func money(_ amount: Double, locale: Locale = .current) -> String {
+    static func money(_ amount: Double, currency: String? = nil,
+                      locale: Locale = .current) -> String {
         let formatter = NumberFormatter()
         formatter.numberStyle = .currency
-        formatter.currencyCode = "USD"
+        formatter.currencyCode = currency ?? "USD"
         formatter.locale = locale
         return formatter.string(from: amount as NSNumber) ?? "\(amount)"
     }
@@ -80,7 +87,8 @@ struct LimitWindow: Identifiable, Codable, Equatable {
         // Money first, where the window is metered in it: "12% Used" is true
         // of a spend limit and useless — what is being watched is the balance.
         if let usedDollars, let limitDollars {
-            return "\(Self.money(usedDollars)) of \(Self.money(limitDollars)) used"
+            return "\(Self.money(usedDollars, currency: currency)) of "
+                 + "\(Self.money(limitDollars, currency: currency)) used"
         }
         if let usedFraction {
             // Both ends of the same figure. Vendors do not agree on which to
