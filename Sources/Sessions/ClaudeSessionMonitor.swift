@@ -98,7 +98,15 @@ final class ClaudeSessionMonitor: ObservableObject, AgentActivityMonitor {
                       let record = ClaudeSessionRecord(json: json),
                       ProcessLiveness.isAlive(pid: record.pid, startedAt: record.startedAt)
                 else { return nil }
-                return record.session
+                // Read on the same pass rather than watched: a transcript is
+                // appended to constantly while a turn runs, and a file event
+                // per line would rescan the whole directory dozens of times a
+                // second. The liveness timer's tick is soon enough for "is it
+                // still working", and the numbers on the card move with it.
+                guard !record.declaresState, let transcript = record.transcript else {
+                    return record.session
+                }
+                return record.withTranscript(ClaudeTranscript.progress(at: transcript))
             }
             .sorted { $0.since > $1.since }
     }
