@@ -151,22 +151,33 @@ private struct GlyphActivity<Content: View>: View {
         // ease-in-out, and the plainer `pulse` is 1 → .4 over 1.5s. So the
         // mark here breathes exactly the way Claude's own surfaces breathe
         // while they are working — which is the thing being reported.
-        case .working: Breathing(trough: 0.6, period: 2.0) { content }
+        case .working: Breathing(trough: 0.6, scale: 0.86, period: 2.0) { content }
         // The insistent one of the pair, because this state wants something.
         // The colour says so too; the two together are hard to miss and still
         // not a different vocabulary.
-        case .waiting: Breathing(trough: 0.4, period: 1.5) { content }
+        case .waiting: Breathing(trough: 0.4, scale: 0.78, period: 1.5) { content }
         case .idle:    content
         }
     }
 }
 
-/// Opacity in, opacity out. No scaling and no rotation: the mark's own shape
-/// carries the identity of the ring, and a mark that changes size or angle
-/// stops reading as that logo for as long as it is moving.
+/// A breath: the mark draws in and fades, then comes back to full size and
+/// full strength.
+///
+/// Faint *and* small at the bottom of the breath, rather than one or the other
+/// — the two move together, so it reads as one movement instead of two effects
+/// on the same object. It shrinks rather than blooming: the mark sits inside a
+/// ring with a track around it, and growing toward that track makes the pair
+/// look crowded at the top of every breath.
+///
+/// No rotation, on purpose: turning a logo makes it stop reading as that logo
+/// for as long as it moves, and the ring's identity is the only thing the mark
+/// is there for.
 private struct Breathing<Content: View>: View {
     /// How faint it gets at the bottom of the breath.
     let trough: Double
+    /// And how small — a fraction of its resting size.
+    let scale: Double
     /// Seconds for the whole in-and-out.
     let period: Double
     @ViewBuilder let content: Content
@@ -174,6 +185,7 @@ private struct Breathing<Content: View>: View {
 
     var body: some View {
         content
+            .scaleEffect(out ? scale : 1)
             .opacity(out ? trough : 1)
             .onAppear {
                 // Half the period each way, which is what a CSS keyframe at
