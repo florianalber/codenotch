@@ -17,6 +17,9 @@ struct ProviderRing: View {
     /// what it means for you — a ring reading 16% while the account is paused
     /// is technically true and practically a lie.
     var isBlocked: Bool = false
+    /// On course to be spent before it resets. The ring carries the same fact
+    /// as the tooltip's bar, since it is the glanceable half of it.
+    var runsOutBeforeReset: Bool = false
     var activity: ActivitySummary?
     /// A fetch this cell asked for, in flight.
     var isRefreshing: Bool = false
@@ -28,7 +31,9 @@ struct ProviderRing: View {
     @State private var spin: Double = 0
 
     private var band: UsageBand {
-        isBlocked ? .exhausted : UsageBand.band(for: usedFraction ?? 0)
+        guard !isBlocked else { return .exhausted }
+        return UsageBand.band(for: usedFraction ?? 0,
+                              runsOutBeforeReset: runsOutBeforeReset)
     }
     private var sweep: CGFloat { CGFloat(min(max(usedFraction ?? 0, 0), 1)) }
 
@@ -280,6 +285,7 @@ struct ProviderCell: View {
                 glyph: snapshot.glyph,
                 isStale: snapshot.status.isStale || !snapshot.hasReading,
                 isBlocked: snapshot.block != nil,
+                runsOutBeforeReset: snapshot.headline?.runsOutBeforeReset ?? false,
                 activity: activity,
                 isRefreshing: isRefreshing,
                 now: now

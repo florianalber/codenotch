@@ -233,7 +233,10 @@ private struct LimitWindowRow: View {
     let fidelity: Fidelity
     let now: Date
 
-    private var band: UsageBand { UsageBand.band(for: window.usedFraction ?? 0) }
+    private var band: UsageBand {
+        UsageBand.band(for: window.usedFraction ?? 0,
+                       runsOutBeforeReset: window.runsOutBeforeReset)
+    }
     private var trackWidth: CGFloat { NotchLayout.cardWidth - 2 * NotchLayout.cardPadding }
     private var fillWidth: CGFloat {
         let fraction = CGFloat(min(max(window.usedFraction ?? 0, 0), 1))
@@ -243,6 +246,14 @@ private struct LimitWindowRow: View {
     /// Blank rather than invented: some providers never say when the window rolls.
     private var resetText: String {
         window.resetsAt.map { ResetCopy.text(for: $0, now: now) } ?? ""
+    }
+
+    /// Why the bar is amber at a comfortable-looking percentage: at the rate
+    /// this window is being spent, it goes before it rolls. Empty otherwise,
+    /// which is almost always.
+    private var pace: String {
+        guard let runsOutAt = window.runsOutAt else { return "" }
+        return " · out in \(ElapsedCopy.until(runsOutAt, now: now))"
     }
 
     var body: some View {
@@ -260,9 +271,14 @@ private struct LimitWindowRow: View {
                 .padding(.top, NotchLayout.labelToBar)
             }
 
-            Text("\(window.usedFraction == nil ? "" : fidelity.qualifier)\(window.summary)")
+            Text("\(window.usedFraction == nil ? "" : fidelity.qualifier)\(window.summary)\(pace)")
                 .font(Typography.cardBody)
                 .foregroundStyle(Palette.textPrimary)
+                // The colour says "watch this"; this line is where it says
+                // why. Held to one line because the card's height is budgeted
+                // per row rather than measured — a second line here would be
+                // clipped off the top of the card, taking the title with it.
+                .lineLimit(1)
                 .padding(.top, NotchLayout.barToUsed)
         }
     }

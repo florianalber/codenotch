@@ -9,6 +9,14 @@ enum ElapsedCopy {
         return elapsed == "just now" ? elapsed : "\(elapsed) ago"
     }
 
+    /// The same phrasing for a span that lies ahead rather than behind, so
+    /// "2 hr" means the same thing in both directions. "just now" would read
+    /// as nonsense forwards, so an imminent one is simply "now".
+    static func until(_ date: Date, now: Date = Date()) -> String {
+        let span = text(since: now, now: date)
+        return span == "just now" ? "now" : span
+    }
+
     static func text(since: Date, now: Date = Date()) -> String {
         let seconds = max(0, now.timeIntervalSince(since))
         if seconds < 45 { return "just now" }

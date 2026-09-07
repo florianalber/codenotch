@@ -52,6 +52,12 @@ struct LimitWindow: Identifiable, Codable, Equatable {
     /// an amount whose currency is guessed is a number that reads right and
     /// means something else.
     let currency: String?
+    /// When this window will be spent at the rate it is being spent at — set
+    /// only where that moment falls *before* the window resets, which is the
+    /// only case worth saying anything about. Filled in by the store from its
+    /// own past readings, not by the provider: it is a fact about how the
+    /// window has been used, not about what the vendor reported.
+    var runsOutAt: Date?
 
     init(id: String, label: String, usedFraction: Double? = nil,
          remaining: Int? = nil, used: Int? = nil, resetsAt: Date? = nil,
@@ -70,6 +76,9 @@ struct LimitWindow: Identifiable, Codable, Equatable {
 
     /// True for a window whose limit is an amount of money.
     var isMetered: Bool { usedDollars != nil && limitDollars != nil }
+
+    /// Whether this window is on course to be spent before it resets.
+    var runsOutBeforeReset: Bool { runsOutAt != nil }
 
     /// "0,00 $" — the vendor's figure in the reader's own number format, with
     /// the currency it is actually billed in rather than the reader's.
@@ -142,7 +151,9 @@ struct ProviderSnapshot: Identifiable, Equatable {
     let glyph: ProviderGlyph
     let fidelity: Fidelity
     var status: ProviderStatus
-    let windows: [LimitWindow]
+    /// `var` so the store can fold each window's measured pace into it — see
+    /// `UsageStore.forecast`. Providers still hand this over whole.
+    var windows: [LimitWindow]
     /// Which window the ring means, declared by the provider rather than left to
     /// position. Without it the headline is "whichever window happens to be
     /// first", and a window dropping out of the response silently promotes

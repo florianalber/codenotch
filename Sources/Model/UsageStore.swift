@@ -64,6 +64,9 @@ final class UsageStore: ObservableObject {
 
     private let archive: UsageArchive
     private var lastGood: [String: (snapshot: ProviderSnapshot, fetchedAt: Date)] = [:]
+    /// The first reading of each window since it last rolled, by
+    /// `<provider>#<window>` — what the pace is measured against.
+    private var paces: [String: UsagePace] = [:]
     private var timer: Timer?
     private var refreshTask: Task<Void, Never>?
     /// Set synchronously before the task exists, so "is one already running"
@@ -94,6 +97,7 @@ final class UsageStore: ObservableObject {
         // every remembered reading on any launch with a provider switched off.
         _disconnected = Published(initialValue: disconnected)
         lastGood = archive.load()
+        paces = archive.loadPaces()
         // Pruned here as well as in `didSet`, because `didSet` cannot be relied
         // on to run: it guards against a no-op change, and the value the
         // preference binding delivers a moment later is usually identical to
@@ -374,6 +378,36 @@ final class UsageStore: ObservableObject {
         }
     }
 
+    /// Fold each window's own pace into it: how fast it is being spent, and
+    /// whether that runs it out before it resets.
+    ///
+    /// Done here rather than in the provider because it is not a fact the
+    /// vendor reported — it is a fact about this machine's own readings over
+    /// time, and only the store has those.
+    private func forecast(_ snapshot: ProviderSnapshot, now: Date = Date()) -> ProviderSnapshot {
+        var updated = snapshot
+        var changed = false
+
+        updated.windows = snapshot.windows.map { window in
+            guard let fraction = window.usedFraction else { return window }
+            let key = "\(snapshot.id)\(ProviderSnapshot.cellSeparator)\(window.id)"
+            let baseline = UsageForecast.baseline(paces[key], fraction: fraction,
+                                                  resetsAt: window.resetsAt, now: now)
+            if paces[key] != baseline {
+                paces[key] = baseline
+                changed = true
+            }
+
+            var window = window
+            window.runsOutAt = UsageForecast.runsOut(baseline: baseline, fraction: fraction,
+                                                     resetsAt: window.resetsAt, now: now)
+            return window
+        }
+
+        if changed { archive.savePaces(paces) }
+        return updated
+    }
+
     private func isCurrent(_ providerID: String, version: UUID?) -> Bool {
         !Task.isCancelled && !disconnected.contains(providerID)
             && connectionVersions[providerID] == version
@@ -386,11 +420,15 @@ final class UsageStore: ObservableObject {
         do {
             let fresh = try await provider.fetchSnapshot()
             guard isCurrent(provider.id, version: version) else { return nil }
+            // Archived without the forecast, on purpose: a forecast is a
+            // statement about *now*, and a reading restored from the archive
+            // at the next launch would carry a projection made from a rate
+            // that stopped being measured when the app quit.
             lastGood[provider.id] = (fresh, Date())
             archive.save(lastGood)
             refusedAccess.remove(provider.id)
             Log.usage.debug("\(provider.id, privacy: .public): \(fresh.windows.count) window(s)")
-            return fresh
+            return forecast(fresh)
         } catch {
             guard isCurrent(provider.id, version: version) else { return nil }
             Log.usage.error("\(provider.id, privacy: .public) failed: \(String(describing: error), privacy: .public)")
