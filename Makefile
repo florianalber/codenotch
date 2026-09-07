@@ -12,15 +12,38 @@ PROJECT := Codenotch.xcodeproj
 SCHEME  := Codenotch
 DEST    := platform=macOS,arch=arm64
 
-# Debug ad-hoc signs itself when the maintainer's Developer ID certificate
-# isn't in the keychain, which is every machine but the maintainer's — so a
-# contributor can `make build`/`make test`/`make run` with no Apple account at
-# all, per CONTRIBUTING.md. On the maintainer's own machine this is empty and
-# changes nothing: project.yml's stable identity is what keeps a keychain
-# "Always Allow" grant alive across rebuilds, and forcing ad-hoc there would
-# throw that away and bring the prompt back on every `make run`.
-ifeq (,$(shell security find-identity -v -p codesigning 2>/dev/null | grep -c "Developer ID Application"))
+# Debug signs itself when the maintainer's Developer ID certificate isn't in
+# the keychain, which is every machine but the maintainer's — so a contributor
+# can `make build`/`make test`/`make run` with no Apple account at all, per
+# CONTRIBUTING.md. On the maintainer's own machine this is empty and changes
+# nothing: project.yml's stable identity is what keeps a keychain "Always
+# Allow" grant alive across rebuilds, and forcing another one there would throw
+# that away and bring the prompt back on every `make run`.
+#
+# `grep`, not `grep -c`: `-c` prints "0" rather than nothing when it matches
+# nothing, so `ifeq (,...)` was never true and a machine *without* the
+# certificate fell through to signing with an identity it does not have —
+# "Signing for Codenotch requires a development team", on every target.
+HAS_DEVELOPER_ID := $(shell security find-identity -v -p codesigning 2>/dev/null | grep "Developer ID Application")
+
+# A personal "Apple Development" certificate, where there is one, is preferred
+# over ad-hoc for exactly the reason the maintainer's identity is: it is
+# stable, so a keychain "Always Allow" grant survives the next rebuild, and
+# working on the credential-reading paths does not mean re-granting after every
+# build. Its team is read out of the certificate itself, since manual signing
+# will not proceed without one; with nothing parsed, ad-hoc is the fallback and
+# needs no Apple account.
+DEV_TEAM := $(shell security find-certificate -c "Apple Development" -p 2>/dev/null \
+	| openssl x509 -noout -subject 2>/dev/null \
+	| sed -n 's/.*OU *= *\([A-Z0-9]*\).*/\1/p')
+
+ifeq (,$(HAS_DEVELOPER_ID))
+ifeq (,$(DEV_TEAM))
 DEV_SIGN := CODE_SIGN_IDENTITY="-" DEVELOPMENT_TEAM="" CODE_SIGN_STYLE=Automatic
+else
+DEV_SIGN := CODE_SIGN_IDENTITY="Apple Development" CODE_SIGN_STYLE=Manual \
+	DEVELOPMENT_TEAM="$(DEV_TEAM)" PROVISIONING_PROFILE_SPECIFIER=""
+endif
 endif
 
 .PHONY: gen build test run clean
