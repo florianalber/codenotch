@@ -66,27 +66,78 @@ enum UsageForecast {
         }
     }
 
-    /// When this window will be spent at the rate measured since the baseline,
-    /// but only where that lands *before* it resets — which is the whole
-    /// question. Nil when it comfortably lasts, and nil wherever the answer
-    /// cannot honestly be given yet.
-    static func runsOut(baseline: UsagePace, fraction: Double,
+    /// How long each of Claude's windows is.
+    ///
+    /// The endpoint never says: it reports how much of a window is gone and
+    /// when it rolls, and nothing about when it began. But the plan fixes it,
+    /// and Claude Code's own `/usage` says the same — the session is the
+    /// rolling five hours, the weekly windows are seven days — so the reset
+    /// time *is* the start time, five hours or seven days earlier. That turns
+    /// a single reading into a rate: what is gone, over how much of the window
+    /// has passed.
+    ///
+    /// A kind that is not listed here gets no forecast from one reading. It
+    /// still gets one from two, which is what `UsagePace` is for — and a spend
+    /// limit, which has no length and no reset, gets none either way.
+    static func length(ofWindow id: String) -> TimeInterval? {
+        switch id {
+        case "session":                    return 5 * 3600
+        case _ where id.hasPrefix("weekly_"): return 7 * 24 * 3600
+        default:                           return nil
+        }
+    }
+
+    /// When this window will be spent at the rate it is being spent at, but
+    /// only where that lands *before* it resets — which is the whole question.
+    /// Nil when it comfortably lasts, and nil wherever the answer cannot
+    /// honestly be given yet.
+    static func runsOut(baseline: UsagePace?, window id: String, fraction: Double,
                         resetsAt: Date?, now: Date) -> Date? {
         // Without a reset time there is nothing to run out *before*.
         guard let resetsAt, resetsAt > now else { return nil }
-        // Already spent: the ring is at its last band and a forecast would add
-        // nothing to it.
+        // Already spent: the ring is at its last band, and a forecast adds
+        // nothing to a limit you have already hit.
         let remaining = 1 - fraction
         guard remaining > 0 else { return nil }
+        guard let rate = rate(baseline: baseline, window: id, fraction: fraction,
+                              resetsAt: resetsAt, now: now) else { return nil }
 
-        let span = now.timeIntervalSince(baseline.takenAt)
-        guard span >= minimumSpan else { return nil }
-
-        let burned = fraction - baseline.fraction
-        guard burned > 0 else { return nil }   // standing still lasts for ever
-
-        let secondsLeft = remaining / (burned / span)
-        let runsOutAt = now.addingTimeInterval(secondsLeft)
+        let runsOutAt = now.addingTimeInterval(remaining / rate)
         return runsOutAt < resetsAt ? runsOutAt : nil
+    }
+
+    /// Fraction of the window spent per second.
+    ///
+    /// Two sources, in order of what they can say. A baseline that has stood
+    /// long enough measures the *recent* speed, which is what "at this rate"
+    /// means and what a window's own average cannot see — someone who burned
+    /// half a session in ten minutes and then went to lunch is not running out
+    /// of anything. So once there is one, it answers alone, including when its
+    /// answer is "you have stopped".
+    ///
+    /// Until then the window's own average carries it: what is gone, over how
+    /// long the window has been open. That needs no history at all, so a fresh
+    /// launch — or a window that has just rolled — is not blind for the first
+    /// ten minutes.
+    private static func rate(baseline: UsagePace?, window id: String, fraction: Double,
+                             resetsAt: Date, now: Date) -> Double? {
+        if let baseline, now.timeIntervalSince(baseline.takenAt) >= minimumSpan {
+            let burned = fraction - baseline.fraction
+            guard burned > 0 else { return nil }   // standing still lasts for ever
+            return burned / now.timeIntervalSince(baseline.takenAt)
+        }
+
+        guard fraction > 0, let length = length(ofWindow: id) else { return nil }
+        // The window opened one length before it closes, so this is how far
+        // into it we are. Clamped: a reset time that has slipped forward would
+        // otherwise report a window as *not yet open*.
+        let elapsed = min(length, length - resetsAt.timeIntervalSince(now))
+        // The same guard the measured rate has, and for the same reason: 1% in
+        // the first minute of a five-hour window projects to running out in
+        // ninety minutes, and every session would go amber on its first
+        // request. Proportional as well, so a weekly window is not judged on
+        // its first ten minutes either.
+        guard elapsed >= max(minimumSpan, length * 0.05) else { return nil }
+        return fraction / elapsed
     }
 }

@@ -399,7 +399,8 @@ final class UsageStore: ObservableObject {
             }
 
             var window = window
-            window.runsOutAt = UsageForecast.runsOut(baseline: baseline, fraction: fraction,
+            window.runsOutAt = UsageForecast.runsOut(baseline: baseline, window: window.id,
+                                                     fraction: fraction,
                                                      resetsAt: window.resetsAt, now: now)
             return window
         }
