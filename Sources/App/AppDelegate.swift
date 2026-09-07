@@ -24,10 +24,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// Every Claude Code configuration directory on this Mac — `~/.claude` and
-    /// any `~/.claude-<slug>` — found once at launch. Each gets a usage
-    /// provider and a session monitor of its own, keyed by the same id, so a
-    /// work login's sessions spin the work ring and nobody else's.
-    private let claudeProfiles = ClaudeProfile.discover()
+    /// any `~/.claude-<slug>`. Each gets a usage provider and a session monitor
+    /// of its own, keyed by the same id, so a work login's sessions spin the
+    /// work ring and nobody else's.
+    ///
+    /// A `var`, and kept in step by `profileWatcher`: signing a second account
+    /// in while the app runs used to produce nothing at all until it was
+    /// restarted, with no hint that a restart was what was missing.
+    private var claudeProfiles = ClaudeProfile.discover()
+    private var profileWatcher: ClaudeProfileWatcher?
+    /// Held so a profile adopted at runtime can be wired up exactly the way
+    /// the ones at launch are.
+    private weak var controller: NotchWindowController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Set here, not in the Info.plist: this call is applied at launch and
@@ -185,33 +193,79 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // What each agent is doing right now, so the notch can say whether it is
         // still working without you switching to it.
-        var monitors: [String: any AgentActivityMonitor] = [
+        let monitors: [String: any AgentActivityMonitor] = [
             "cursor": CursorActivityMonitor(),
             "codex": CodexActivityMonitor(),
             "gemini": AntigravityActivityMonitor(),
             "grok": GrokActivityMonitor()
-        ]
-        for profile in claudeProfiles {
-            monitors[profile.id] = ClaudeSessionMonitor(directory: profile.sessionsDirectory)
-        }
+        ].merging(
+            claudeProfiles.map { ($0.id, ClaudeSessionMonitor(directory: $0.sessionsDirectory)) },
+            uniquingKeysWith: { _, profile in profile }
+        )
+        self.controller = controller
         for (id, monitor) in monitors {
-            monitor.sessionsPublisher
-                .receive(on: RunLoop.main)
-                .sink { [weak controller] live in
-                    withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
-                        controller?.model.sessions[id] = live
-                    }
-                    controller?.model.now = Date()
-                }
-                .store(in: &cancellables)
-            monitor.start()
+            self.monitors[id] = monitor
+            watch(monitor, as: id)
         }
         // Poll usage hard only while something is actually running.
-        store?.isBusy = { monitors.values.contains { m in m.sessions.contains { $0.state == .busy } } }
-        self.monitors = monitors
+        //
+        // Reads `self.monitors` rather than closing over the list built above:
+        // a profile adopted at runtime adds a monitor, and a closure holding
+        // its own copy of the dictionary would never see it — the notch would
+        // spin that ring while the store still believed the machine idle.
+        store?.isBusy = { [weak self] in
+            self?.monitors.values.contains { m in m.sessions.contains { $0.state == .busy } } ?? false
+        }
+
+        // Profiles that appear or disappear after launch.
+        let watcher = ClaudeProfileWatcher(profiles: claudeProfiles)
+        watcher.onChange = { [weak self] profiles in self?.adopt(profiles: profiles) }
+        watcher.start()
+        profileWatcher = watcher
 
         controller.show()
         notchController = controller
+    }
+
+    /// Bring the running app in line with the profiles now on disk.
+    ///
+    /// Both directions: a directory that is gone takes its ring and its
+    /// sessions with it, or a deleted login would leave a permanent
+    /// "sign in" ring for an account that no longer exists.
+    @MainActor private func adopt(profiles: [ClaudeProfile]) {
+        let known = Set(claudeProfiles.map(\.id))
+        let found = Set(profiles.map(\.id))
+        claudeProfiles = profiles
+
+        for profile in profiles where !known.contains(profile.id) {
+            Log.usage.info("claude profile appeared: \(profile.displayPath, privacy: .public)")
+            store?.adopt(ClaudeOAuthProvider(profile: profile))
+            let monitor = ClaudeSessionMonitor(directory: profile.sessionsDirectory)
+            monitors[profile.id] = monitor
+            watch(monitor, as: profile.id)
+        }
+
+        for id in known.subtracting(found) {
+            Log.usage.info("claude profile went away: \(id, privacy: .public)")
+            store?.drop(providerID: id)
+            monitors[id]?.stop()
+            monitors.removeValue(forKey: id)
+            controller?.model.sessions[id] = nil
+        }
+    }
+
+    /// Wire one activity monitor's sessions into the notch, and start it.
+    @MainActor private func watch(_ monitor: any AgentActivityMonitor, as id: String) {
+        monitor.sessionsPublisher
+            .receive(on: RunLoop.main)
+            .sink { [weak controller] live in
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
+                    controller?.model.sessions[id] = live
+                }
+                controller?.model.now = Date()
+            }
+            .store(in: &cancellables)
+        monitor.start()
     }
 
     /// Closing the settings window must not take the app with it.

@@ -200,3 +200,112 @@ final class ClaudeProfileTests: XCTestCase {
         XCTAssertEqual(store.providerSummaries.map(\.name), ["Claude", "Claude (work)"])
     }
 }
+
+/// A profile signed in while the app is running. Before this the list of
+/// accounts was read once at launch, so a second login produced nothing at all
+/// until the app was restarted — with no hint that a restart was what was
+/// missing.
+@MainActor
+final class RuntimeProfileAdoptionTests: XCTestCase {
+    private var defaults: UserDefaults!
+    private let home = URL(fileURLWithPath: "/Users/vinz")
+
+    override func setUp() {
+        let name = "RuntimeProfileAdoption.\(UUID().uuidString)"
+        defaults = UserDefaults(suiteName: name)!
+        defaults.removePersistentDomain(forName: name)
+    }
+
+    private func provider(_ slug: String?) -> ClaudeOAuthProvider {
+        let profile = slug.map {
+            ClaudeProfile(slug: $0, configDirectory: home.appendingPathComponent(".claude-\($0)"))
+        } ?? .default(home: home)
+        return ClaudeOAuthProvider(profile: profile, archive: UsageArchive(defaults: defaults))
+    }
+
+    private func store(_ providers: [UsageProvider],
+                       disconnected: Set<String> = []) -> UsageStore {
+        UsageStore(providers: providers, archive: UsageArchive(defaults: defaults),
+                   disconnected: disconnected)
+    }
+
+    func testAnAdoptedProfileGetsACellAtOnce() {
+        let store = self.store([provider(nil)])
+        XCTAssertEqual(store.snapshots.map(\.id), ["claude"])
+
+        store.adopt(provider("enterprise"))
+        XCTAssertEqual(store.snapshots.map(\.id), ["claude", "claude-enterprise"])
+        XCTAssertEqual(store.providerSummaries.map(\.id), ["claude", "claude-enterprise"])
+    }
+
+    /// Adopting twice must not double the ring — the watcher reports the whole
+    /// list, and a rescan can arrive while the first adoption is still settling.
+    func testAdoptingTwiceIsHarmless() {
+        let store = self.store([provider(nil)])
+        store.adopt(provider("enterprise"))
+        store.adopt(provider("enterprise"))
+        XCTAssertEqual(store.snapshots.map(\.id), ["claude", "claude-enterprise"])
+    }
+
+    /// Beside its own kind, not at the end: the stack has to be in the same
+    /// order now as it will be after the next launch, where `discover()` lists
+    /// the profiles together at the front.
+    func testItLandsBesideTheOtherProfiles() {
+        let store = self.store([provider(nil), CursorLocalProvider()])
+        store.adopt(provider("enterprise"))
+        XCTAssertEqual(store.providerSummaries.map(\.id),
+                       ["claude", "claude-enterprise", "cursor"])
+        XCTAssertEqual(store.snapshots.map(\.id), ["claude", "claude-enterprise", "cursor"])
+    }
+
+    /// A profile switched off in settings is not fetched and draws no ring, and
+    /// adopting it must not smuggle one in.
+    func testASwitchedOffProfileStaysOff() {
+        let store = self.store([provider(nil)], disconnected: ["claude-enterprise"])
+        store.adopt(provider("enterprise"))
+        XCTAssertEqual(store.snapshots.map(\.id), ["claude"])
+        XCTAssertEqual(store.providerSummaries.map(\.id), ["claude", "claude-enterprise"],
+                       "it is still listed in settings, so it can be switched back on")
+    }
+
+    /// A deleted login has to take its ring with it, or it would sit there for
+    /// ever asking to sign in to an account that no longer exists.
+    func testDroppingAProfileTakesItsCell() {
+        let store = self.store([provider(nil), provider("enterprise")])
+        store.drop(providerID: "claude-enterprise")
+        XCTAssertEqual(store.snapshots.map(\.id), ["claude"])
+        XCTAssertEqual(store.providerSummaries.map(\.id), ["claude"])
+    }
+
+    /// Dropping is not signing out: nothing of the account is deleted, so a
+    /// directory that is moved back comes back with its number rather than as
+    /// an empty ring.
+    func testDroppingKeepsTheRememberedReading() {
+        let archive = UsageArchive(defaults: defaults)
+        let remembered = ProviderSnapshot(
+            id: "claude-enterprise", displayName: "Claude (enterprise)", glyph: .claude,
+            fidelity: .official, status: .ok,
+            windows: [LimitWindow(id: "spend", label: "Spend limit", usedFraction: 0.0148,
+                                  usedDollars: 2.97, limitDollars: 200, currency: "USD")],
+            headlineID: "spend"
+        )
+        archive.save(["claude-enterprise": (remembered, Date())])
+
+        let store = self.store([provider(nil), provider("enterprise")])
+        XCTAssertEqual(store.snapshots.count, 2)
+        store.drop(providerID: "claude-enterprise")
+        XCTAssertNotNil(archive.load()["claude-enterprise"], "the archive is untouched")
+
+        // And it comes back with the figure it had.
+        store.adopt(provider("enterprise"))
+        let back = store.snapshots.first { $0.id == "claude-enterprise" }
+        XCTAssertEqual(back?.headline?.limitDollars, 200)
+        XCTAssertTrue(back?.status.isStale ?? false, "remembered, and dated as such")
+    }
+
+    func testDroppingSomethingUnknownDoesNothing() {
+        let store = self.store([provider(nil)])
+        store.drop(providerID: "claude-nope")
+        XCTAssertEqual(store.snapshots.map(\.id), ["claude"])
+    }
+}

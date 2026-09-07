@@ -13,7 +13,10 @@ final class UsageStore: ObservableObject {
     /// succeeds. The settings row's only honest basis for offering to ask again.
     @Published private(set) var refusedAccess: Set<String> = []
 
-    private let providers: [UsageProvider]
+    /// Mutable, because the set of accounts on this machine is: signing a
+    /// Claude profile in while the app is running adds one. Never mutated
+    /// except through `adopt` and `drop` below.
+    private var providers: [UsageProvider]
     /// A response belongs to the connection that started it. Checking only
     /// `disconnected` would accept an old response after a quick off/on toggle.
     private var connectionVersions: [String: UUID] = [:]
@@ -109,6 +112,62 @@ final class UsageStore: ObservableObject {
             snapshot.status = .stale(since: remembered.fetchedAt)
             return snapshot
         }
+    }
+
+    // MARK: - Accounts that appear and disappear while running
+
+    /// Take on a provider that did not exist at launch.
+    ///
+    /// Seeded the same way the initialiser seeds the rest: from the archive if
+    /// there is a remembered reading, and a placeholder otherwise. Then fetched
+    /// at once — a ring that appears and sits blank until the next tick reads
+    /// as broken, and the reason it appeared is that somebody just signed in.
+    ///
+    /// Inserted beside its own kind rather than appended, so the stack is in
+    /// the same order now as it will be after the next launch, when
+    /// `ClaudeProfile.discover()` lists the profiles together at the front.
+    func adopt(_ provider: UsageProvider) {
+        guard !providers.contains(where: { $0.id == provider.id }) else { return }
+
+        let insertion = providers.lastIndex { ClaudeProfile.isClaude(providerID: $0.id) }
+        if ClaudeProfile.isClaude(providerID: provider.id), let insertion {
+            providers.insert(provider, at: insertion + 1)
+        } else {
+            providers.append(provider)
+        }
+
+        guard !disconnected.contains(provider.id) else { return }
+        let seed: ProviderSnapshot
+        if let remembered = lastGood[provider.id] {
+            var snapshot = remembered.snapshot
+            snapshot.status = .stale(since: remembered.fetchedAt)
+            seed = snapshot
+        } else {
+            seed = Self.placeholder(provider)
+        }
+        // At the position the provider itself now holds among those that are
+        // switched on, so the new ring lands where its provider sits rather
+        // than at the end of the stack.
+        let position = providers
+            .filter { !disconnected.contains($0.id) }
+            .firstIndex { $0.id == provider.id } ?? snapshots.count
+        snapshots.insert(seed, at: min(position, snapshots.count))
+        refresh(providerID: provider.id)
+    }
+
+    /// Drop a provider whose account is no longer on this machine.
+    ///
+    /// Deliberately *not* `signOut`: nothing of the account is deleted and the
+    /// archived reading stays, because a config directory that is renamed or
+    /// moved back is the same account and should come back with its number
+    /// rather than as an empty ring.
+    func drop(providerID: String) {
+        guard providers.contains(where: { $0.id == providerID }) else { return }
+        connectionVersions[providerID] = UUID()   // invalidate anything in flight
+        providers.removeAll { $0.id == providerID }
+        snapshots.removeAll { $0.id == providerID }
+        refusedAccess.remove(providerID)
+        refreshing.remove(providerID)
     }
 
     /// Enough to list the providers in settings without exposing them.
