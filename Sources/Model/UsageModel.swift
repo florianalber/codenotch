@@ -162,6 +162,17 @@ struct ProviderSnapshot: Identifiable, Equatable {
     /// Set when something is blocked right now. Deliberately separate from the
     /// windows: it is not a measurement, it is a door being shut.
     var block: UsageBlock?
+    /// What the credential that produced this reading says it is — the plan,
+    /// named the way the vendor names it.
+    ///
+    /// Shown because Codenotch never signs in: it borrows a credential another
+    /// tool holds, and nothing stops that credential belonging to a different
+    /// account than the directory it was read from suggests. That is not
+    /// hypothetical — a profile that had always been a Team seat came back
+    /// reporting an Enterprise balance after an organisation switch elsewhere,
+    /// and the ring looked entirely normal while doing it. The only thing that
+    /// would have given it away is the reading saying whose it is.
+    var account: String?
     /// Whether this cell is the one that carries the account's live sessions.
     ///
     /// False only for the extra cells `ProviderCells` makes when one account is

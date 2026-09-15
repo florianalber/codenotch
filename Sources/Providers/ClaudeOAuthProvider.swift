@@ -138,7 +138,12 @@ actor ClaudeOAuthProvider: UsageProvider {
             fidelity: .official,
             status: .ok,
             windows: windows,
-            headlineID: UsageResponse.headlineID(for: windows)
+            headlineID: UsageResponse.headlineID(for: windows),
+            // From the credential this very fetch used, rather than read from
+            // the keychain again for the sake of the label: the point is to
+            // say whose reading this is, and only the token that fetched it
+            // can answer that.
+            account: credentials?.subscriptionType
         )
     }
 

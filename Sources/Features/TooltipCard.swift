@@ -297,9 +297,20 @@ private struct ProviderTooltip: View {
         return ElapsedCopy.ago(since: since, now: now)
     }
 
+    /// Whose reading this is, beside how old it is.
+    ///
+    /// The account leads: a number from the wrong account is wrong in a way
+    /// that its age cannot fix, and where the line has to be cut short it is
+    /// the age that should go. Both are quiet, on the header's own line, so
+    /// neither costs the card a row.
+    private var note: String? {
+        let parts = [snapshot.account?.capitalized, readingAge].compactMap { $0 }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            TooltipHeader(title: "\(snapshot.displayName) Usage", note: readingAge) {
+            TooltipHeader(title: "\(snapshot.displayName) Usage", note: note) {
                 ProviderGlyphView(glyph: snapshot.glyph)
                     .foregroundStyle(Palette.textPrimary)
             }

@@ -16,6 +16,10 @@ struct UsageArchive {
         let fetchedAt: Date
         /// Optional so archives written before this field still decode.
         let headlineID: String?
+        /// Whose reading this was. Optional for the same reason, and kept so a
+        /// remembered one still says it — a reading restored from the archive
+        /// is exactly when "which account is this?" is hardest to answer.
+        let account: String?
     }
 
     private let defaults: UserDefaults
@@ -101,7 +105,8 @@ struct UsageArchive {
                 fidelity: entry.fidelity,
                 status: .stale(since: entry.fetchedAt),
                 windows: entry.windows,
-                headlineID: entry.headlineID
+                headlineID: entry.headlineID,
+                account: entry.account
             )
             result[entry.id] = (snapshot, entry.fetchedAt)
         }
@@ -117,7 +122,8 @@ struct UsageArchive {
                 fidelity: $0.snapshot.fidelity,
                 windows: $0.snapshot.windows,
                 fetchedAt: $0.fetchedAt,
-                headlineID: $0.snapshot.headlineID
+                headlineID: $0.snapshot.headlineID,
+                account: $0.snapshot.account
             )
         }
         guard let data = try? JSONEncoder().encode(entries) else { return }
