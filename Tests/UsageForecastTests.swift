@@ -1,0 +1,373 @@
+import XCTest
+@testable import Codenotch
+
+/// "At this rate, will it last?" — from the window's own length where it is
+/// known, and from two of our own readings where it is not.
+final class UsageForecastTests: XCTestCase {
+    private let now = Date(timeIntervalSince1970: 1_800_000_000)
+
+    private func baseline(_ fraction: Double, minutesAgo: Double,
+                          resetsAt: Date? = nil) -> UsageBaseline {
+        UsageBaseline(fraction: fraction, takenAt: now.addingTimeInterval(-minutesAgo * 60),
+                      resetsAt: resetsAt)
+    }
+
+    /// The window's length comes from the same place the endpoint's readings
+    /// get it, so these exercise what the app actually sees: five hours for a
+    /// session, seven days for a weekly, nothing for a spend limit.
+    private func runsOut(baseline: UsageBaseline?, window id: String, fraction: Double,
+                         resetsAt: Date?, now: Date) -> Date? {
+        let window = LimitWindow(id: id, label: id, usedFraction: fraction, resetsAt: resetsAt,
+                                 duration: UsageResponse.duration(forKind: id))
+        return UsageForecast.runsOut(window, baseline: baseline, now: now)
+    }
+
+    /// 10% in half an hour, so 20% an hour: the 80% that is left goes in four
+    /// hours, and the window does not roll for nine. It runs out five hours
+    /// before it would have been given back — which is the whole point.
+    func testAWindowThatWillNotLast() throws {
+        let runsOut = try XCTUnwrap(runsOut(
+            baseline: baseline(0.10, minutesAgo: 30), window: "spend",
+            fraction: 0.20,
+            resetsAt: now.addingTimeInterval(9 * 3600),
+            now: now
+        ))
+        XCTAssertEqual(runsOut.timeIntervalSince(now), 4 * 3600, accuracy: 60)
+    }
+
+    /// Exactly on the reset is not "before" it: a window that runs out at the
+    /// moment it rolls has lasted.
+    func testExactlyOnTheResetCountsAsLasting() {
+        XCTAssertNil(runsOut(
+            baseline: baseline(0.10, minutesAgo: 30), window: "session",
+            fraction: 0.20,
+            resetsAt: now.addingTimeInterval(4 * 3600),
+            now: now
+        ))
+    }
+
+    /// A gentler rate says nothing at all: 2% in half an hour leaves 88% to
+    /// spend, which at that pace takes twenty-two hours — long past a reset
+    /// four hours out.
+    func testAWindowThatLastsSaysNothing() {
+        XCTAssertNil(runsOut(
+            baseline: baseline(0.10, minutesAgo: 30), window: "session",
+            fraction: 0.12,
+            resetsAt: now.addingTimeInterval(4 * 3600),
+            now: now
+        ))
+    }
+
+    /// Standing still lasts for ever, whatever the clock says. On a window
+    /// with no published length that is all there is to go on.
+    func testNoBurnMeansNoForecast() {
+        XCTAssertNil(runsOut(
+            baseline: baseline(0.40, minutesAgo: 120), window: "spend",
+            fraction: 0.40,
+            resetsAt: now.addingTimeInterval(600),
+            now: now
+        ))
+    }
+
+    // MARK: - From the window's own length
+
+    /// The case that prompted this: 20% gone, the session resetting in four
+    /// and a quarter hours. The window is five hours long, so it opened
+    /// forty-five minutes ago — 20% in 45 minutes, and the 80% left goes in
+    /// three hours, an hour and a quarter before it would have been given
+    /// back. One reading, no history, because the reset time *is* the start
+    /// time five hours earlier.
+    func testOneReadingIsEnoughWhereTheLengthIsKnown() throws {
+        let runsOut = try XCTUnwrap(runsOut(
+            baseline: nil, window: "session", fraction: 0.20,
+            resetsAt: now.addingTimeInterval(4.25 * 3600), now: now
+        ))
+        XCTAssertEqual(runsOut.timeIntervalSince(now), 3 * 3600, accuracy: 120)
+    }
+
+    /// And a window that has only just opened says nothing: 1% in the first
+    /// minute of five hours projects to running out in ninety, and every
+    /// session would go amber on its first request.
+    func testAWindowThatJustOpenedSaysNothing() {
+        XCTAssertNil(runsOut(
+            baseline: nil, window: "session", fraction: 0.01,
+            resetsAt: now.addingTimeInterval(5 * 3600 - 300), now: now
+        ))
+    }
+
+    /// The floor is proportional as well, so a seven-day window is not judged
+    /// on its first hour either — but is on its first day.
+    func testAWeeklyIsNotJudgedOnItsFirstHour() throws {
+        let week = 7 * 24 * 3600.0
+        XCTAssertNil(runsOut(
+            baseline: nil, window: "weekly_all", fraction: 0.02,
+            resetsAt: now.addingTimeInterval(week - 3600), now: now
+        ))
+
+        // Half of it in the first day: gone on day two, six days early.
+        let runsOut = try XCTUnwrap(runsOut(
+            baseline: nil, window: "weekly_all", fraction: 0.5,
+            resetsAt: now.addingTimeInterval(week - 24 * 3600), now: now
+        ))
+        XCTAssertEqual(runsOut.timeIntervalSince(now), 24 * 3600, accuracy: 600)
+    }
+
+    /// A window whose length is not published gets nothing from one reading —
+    /// no length, no rate — and everything from two.
+    func testAnUnknownLengthNeedsTwoReadings() {
+        XCTAssertNil(runsOut(
+            baseline: nil, window: "spend", fraction: 0.5,
+            resetsAt: now.addingTimeInterval(3600), now: now
+        ))
+        XCTAssertNotNil(runsOut(
+            baseline: baseline(0.2, minutesAgo: 30), window: "spend", fraction: 0.5,
+            resetsAt: now.addingTimeInterval(3600), now: now
+        ))
+    }
+
+    /// The reported case: on the live account the last quarter of an hour had
+    /// been quiet, so a rate measured across it read 13.7%/h against the
+    /// window's own 23.3%/h — and the ring stayed green on a session that was
+    /// an hour short. Where the length is known the average decides, and a
+    /// recent lull does not talk it out of the warning.
+    func testALullDoesNotTalkTheWarningAway() throws {
+        // 24% of a five-hour session, an hour in: 23.3%/h, spent 50 minutes
+        // early. The baseline says only 4% went in the last 17 minutes.
+        let reset = now.addingTimeInterval(4 * 3600)
+        let quiet = UsageBaseline(fraction: 0.20,
+                                  takenAt: now.addingTimeInterval(-17.5 * 60),
+                                  resetsAt: reset)
+        XCTAssertNotNil(try? XCTUnwrap(runsOut(
+            baseline: quiet, window: "session", fraction: 0.24, resetsAt: reset, now: now
+        )))
+    }
+
+    /// And it clears itself as the quiet goes on, rather than snapping between
+    /// colours: the same 24%, four hours into the window, is a quarter of the
+    /// rate and lasts.
+    func testAWarningClearsAsTheQuietGoesOn() {
+        XCTAssertNil(runsOut(
+            baseline: nil, window: "session", fraction: 0.24,
+            resetsAt: now.addingTimeInterval(3600), now: now
+        ))
+    }
+
+    // MARK: - From two readings
+
+    /// A rate needs a span to be a rate. One percent between two polls ninety
+    /// seconds apart projects to nonsense, and the bar would flick amber every
+    /// time a single request landed between readings — so a baseline that
+    /// young is ignored, and the window's own average carries it instead.
+    func testAFreshBaselineIsNotYetARate() {
+        XCTAssertNil(runsOut(
+            baseline: baseline(0.01, minutesAgo: 1.5), window: "session",
+            fraction: 0.02,
+            resetsAt: now.addingTimeInterval(4 * 3600),
+            now: now
+        ))
+        // The same burn, once the baseline has stood long enough to mean it.
+        XCTAssertNotNil(runsOut(
+            baseline: baseline(0.01, minutesAgo: 30), window: "session",
+            fraction: 0.50,
+            resetsAt: now.addingTimeInterval(4 * 3600),
+            now: now
+        ))
+    }
+
+    /// A spent window is already at its last band; a forecast adds nothing.
+    func testAnExhaustedWindowNeedsNoForecast() {
+        XCTAssertNil(runsOut(
+            baseline: baseline(0.5, minutesAgo: 60), window: "session",
+            fraction: 1.0,
+            resetsAt: now.addingTimeInterval(3600),
+            now: now
+        ))
+    }
+
+    /// Without a reset time there is nothing to run out *before*.
+    func testNoResetTimeMeansNoForecast() {
+        XCTAssertNil(runsOut(
+            baseline: baseline(0.1, minutesAgo: 60), window: "session", fraction: 0.9,
+            resetsAt: nil, now: now
+        ))
+    }
+
+    // MARK: - Keeping the baseline
+
+    func testTheBaselineIsHeldWhileTheWindowStands() {
+        let reset = now.addingTimeInterval(3600)
+        let held = baseline(0.2, minutesAgo: 45, resetsAt: reset)
+        XCTAssertEqual(
+            UsageForecast.baseline(held, fraction: 0.3, resetsAt: reset, now: now),
+            held
+        )
+    }
+
+    /// The reported bug: the endpoint's reset time drifts by milliseconds
+    /// between polls, and comparing it exactly read that as a fresh window.
+    /// The baseline then restarted on every reading, its age was always zero,
+    /// and the forecast was never made at all — with nothing visibly broken.
+    func testMillisecondDriftIsTheSameWindow() {
+        let reset = now.addingTimeInterval(4 * 3600)
+        let held = baseline(0.20, minutesAgo: 45, resetsAt: reset)
+        let drifted = reset.addingTimeInterval(0.046)   // the figures actually seen
+        XCTAssertTrue(UsageForecast.isSameWindow(reset, drifted))
+        XCTAssertEqual(
+            UsageForecast.baseline(held, fraction: 0.30, resetsAt: drifted, now: now),
+            held,
+            "a 46ms drift must not throw the measurement away"
+        )
+    }
+
+    /// And a window that has genuinely rolled moves its reset by hours, which
+    /// the tolerance must still catch.
+    func testARealRolloverIsStillNoticed() {
+        let reset = now.addingTimeInterval(600)
+        XCTAssertFalse(UsageForecast.isSameWindow(reset, reset.addingTimeInterval(5 * 3600)))
+        XCTAssertFalse(UsageForecast.isSameWindow(reset, nil))
+        XCTAssertTrue(UsageForecast.isSameWindow(nil, nil))
+    }
+
+    /// A new reset time is a new window, and the old baseline says nothing
+    /// about it.
+    func testARolloverRestartsTheBaseline() {
+        let held = baseline(0.9, minutesAgo: 45, resetsAt: now.addingTimeInterval(60))
+        let fresh = UsageForecast.baseline(held, fraction: 0.0,
+                                           resetsAt: now.addingTimeInterval(5 * 3600), now: now)
+        XCTAssertEqual(fresh.fraction, 0)
+        XCTAssertEqual(fresh.takenAt, now)
+    }
+
+    /// And a reading that has gone *down* is a rollover the reset time did not
+    /// announce — without this the rate would come out negative and the window
+    /// would be reported as lasting for ever.
+    func testAFallingReadingAlsoRestartsIt() {
+        let reset = now.addingTimeInterval(3600)
+        let held = baseline(0.8, minutesAgo: 45, resetsAt: reset)
+        let fresh = UsageForecast.baseline(held, fraction: 0.05, resetsAt: reset, now: now)
+        XCTAssertEqual(fresh.fraction, 0.05)
+        XCTAssertEqual(fresh.takenAt, now)
+    }
+}
+
+/// Where the forecast is attached. It has to ride on whatever reading is
+/// being shown, not only on one that has just arrived.
+@MainActor
+final class ForecastOnRememberedReadingsTests: XCTestCase {
+    /// Never answers usefully and never touches a keychain: these tests are
+    /// about what the store does with the reading it remembers.
+    private final class Stub: UsageProvider, @unchecked Sendable {
+        let id = "claude"
+        let displayName = "Claude"
+        let glyph = ProviderGlyph.claude
+        var signInRoute: SignInRoute { .guidance("") }
+        func account() -> ProviderAccount? { nil }
+        func presentSignIn() {}
+        func fetchSnapshot() async throws -> ProviderSnapshot {
+            throw UsageProviderError.timedOut
+        }
+    }
+
+    private func defaults() -> UserDefaults {
+        let name = "ForecastRemembered.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: name)!
+        defaults.removePersistentDomain(forName: name)
+        return defaults
+    }
+
+    /// A session an hour into its five hours, a quarter spent: it goes before
+    /// it rolls, and the ring has to say so even though the number came out of
+    /// the archive rather than off the wire.
+    ///
+    /// The reported case. A relaunch during a rate-limit back-off showed the
+    /// remembered reading with no forecast on it, and a session that was an
+    /// hour short sat there green.
+    func testARememberedReadingIsForecastToo() throws {
+        let defaults = defaults()
+        let archive = UsageArchive(defaults: defaults)
+        let remembered = ProviderSnapshot(
+            id: "claude", displayName: "Claude", glyph: .claude,
+            fidelity: .official, status: .ok,
+            windows: [LimitWindow(id: "session", label: "Current session",
+                                  usedFraction: 0.24,
+                                  resetsAt: Date().addingTimeInterval(4 * 3600),
+                                  duration: 5 * 3600)],
+            headlineID: "session"
+        )
+        archive.save(["claude": (remembered, Date().addingTimeInterval(-60))])
+
+        let store = UsageStore(providers: [Stub()], archive: archive)
+        let window = try XCTUnwrap(store.snapshots.first?.headline)
+        XCTAssertNotNil(window.runsOutAt, "the archived reading came back without its forecast")
+        XCTAssertTrue(window.runsOutBeforeReset)
+    }
+
+    /// And a window that is being spent gently keeps its green, archive or not.
+    func testARememberedReadingThatLastsStaysQuiet() throws {
+        let defaults = defaults()
+        let archive = UsageArchive(defaults: defaults)
+        let remembered = ProviderSnapshot(
+            id: "claude", displayName: "Claude", glyph: .claude,
+            fidelity: .official, status: .ok,
+            windows: [LimitWindow(id: "session", label: "Current session",
+                                  usedFraction: 0.05,
+                                  resetsAt: Date().addingTimeInterval(3600),
+                                  duration: 5 * 3600)],
+            headlineID: "session"
+        )
+        archive.save(["claude": (remembered, Date().addingTimeInterval(-60))])
+
+        let store = UsageStore(providers: [Stub()], archive: archive)
+        XCTAssertNil(store.snapshots.first?.headline?.runsOutAt)
+    }
+}
+
+/// The colour rule the forecast feeds.
+final class ForecastBandTests: XCTestCase {
+    /// The point of the whole thing: a percentage that looks comfortable, on a
+    /// window that will not last, is worth watching.
+    func testAComfortablePercentageTurnsAmberOnPace() {
+        XCTAssertEqual(UsageBand.band(for: 0.2), .ample)
+        XCTAssertEqual(UsageBand.band(for: 0.2, runsOutBeforeReset: true), .watch)
+    }
+
+    /// It can only raise. "You will run out" is not news beside "you nearly
+    /// have", and a forecast must never make a spent limit look better.
+    func testItNeverLowersTheBand() {
+        XCTAssertEqual(UsageBand.band(for: 0.75, runsOutBeforeReset: true), .critical)
+        XCTAssertEqual(UsageBand.band(for: 1.0, runsOutBeforeReset: true), .exhausted)
+        XCTAssertEqual(UsageBand.band(for: 0.6, runsOutBeforeReset: true), .watch)
+    }
+
+    /// The thresholds are the user's to move, and the forecast follows them:
+    /// "ample" is whatever they said it is.
+    func testItFollowsTheUsersThresholds() {
+        XCTAssertEqual(UsageBand.band(for: 0.3, watchLimit: 0.25, criticalLimit: 0.6,
+                                      runsOutBeforeReset: true), .watch)
+        XCTAssertEqual(UsageBand.band(for: 0.65, watchLimit: 0.25, criticalLimit: 0.6,
+                                      runsOutBeforeReset: true), .critical)
+    }
+
+    func testWithoutAForecastNothingChanges() {
+        for fraction in [0.0, 0.2, 0.55, 0.8, 1.2] {
+            XCTAssertEqual(UsageBand.band(for: fraction, runsOutBeforeReset: false),
+                           UsageBand.band(for: fraction), "\(fraction)")
+        }
+    }
+}
+
+/// The span, phrased forwards.
+final class ElapsedUntilTests: XCTestCase {
+    private let now = Date(timeIntervalSince1970: 1_800_000_000)
+    private let english = Locale(identifier: "en")
+
+    func testItReadsLikeTheOtherSpans() {
+        XCTAssertEqual(ElapsedCopy.until(now.addingTimeInterval(2 * 3600), now: now, locale: english), "2 hr")
+        XCTAssertEqual(ElapsedCopy.until(now.addingTimeInterval(51 * 60), now: now, locale: english), "51 min")
+    }
+
+    /// "just now" reads as nonsense forwards.
+    func testAnImminentSpanIsNow() {
+        XCTAssertEqual(ElapsedCopy.until(now.addingTimeInterval(10), now: now, locale: english), "now")
+    }
+}

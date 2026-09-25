@@ -434,12 +434,19 @@ private struct LimitWindowRow: View {
 
     private var band: UsageBand {
         if let override = window.bandOverride { return override }
-        return UsageBand.band(for: window.usedFraction ?? 0, watchLimit: watchLimit, criticalLimit: criticalLimit)
+        return UsageBand.band(for: window.usedFraction ?? 0, watchLimit: watchLimit, criticalLimit: criticalLimit,
+                              runsOutBeforeReset: window.runsOutBeforeReset)
+    }
+    /// Whether the forecast, not the reading, is what set the colour — the ramp
+    /// would otherwise paint the bar by percentage alone and undo the warning.
+    private var isRaisedByForecast: Bool {
+        window.runsOutBeforeReset && band != UsageBand.band(for: window.usedFraction ?? 0,
+                                                           watchLimit: watchLimit, criticalLimit: criticalLimit)
     }
     /// Continuous when that style is chosen; a `bandOverride` is a deliberate discrete choice
     /// from the caller regardless of style, so it stays exactly as `band.color(accent:)` renders it.
     private var barColor: Color {
-        guard window.bandOverride == nil, colorTransitionStyle == .ramp else {
+        guard window.bandOverride == nil, !isRaisedByForecast, colorTransitionStyle == .ramp else {
             return band.color(accent: accentColor)
         }
         return UsageBand.rampColor(for: window.usedFraction ?? 0, watchLimit: watchLimit, accent: accentColor)
@@ -456,6 +463,14 @@ private struct LimitWindowRow: View {
         }
         return Text(" · \(pace.summary)")
             .foregroundColor(pace.isDeficit ? .orange : secondaryInk)
+    }
+
+    /// Why the bar is amber at a comfortable-looking percentage: at the rate
+    /// this window is being spent, it goes before it rolls. Empty otherwise,
+    /// which is almost always.
+    private var runsOutText: String {
+        guard let runsOutAt = window.runsOutAt else { return "" }
+        return " · " + L10n.t("out in \(ElapsedCopy.until(runsOutAt, now: now))")
     }
 
     /// Blank rather than invented: some providers never say when the window rolls.
@@ -489,7 +504,7 @@ private struct LimitWindowRow: View {
                     .padding(.top, NotchLayout.labelToBar)
                 }
 
-                Text("\(window.usedFraction == nil ? "" : fidelity.qualifier)\(window.detail ?? window.summary)\(paceText)")
+                Text("\(window.usedFraction == nil ? "" : fidelity.qualifier)\(window.detail ?? window.summary)\(runsOutText)\(paceText)")
                     .font(Typography.cardBody)
                     .foregroundStyle(Palette.textPrimary)
                     .lineLimit(1)

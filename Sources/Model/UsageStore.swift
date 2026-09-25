@@ -141,6 +141,8 @@ final class UsageStore: ObservableObject {
 
     private let archive: UsageArchive
     private var lastGood: [String: (snapshot: ProviderSnapshot, fetchedAt: Date)] = [:]
+    /// Each window's first reading since it last rolled — see `UsageForecast`.
+    private var baselines: [String: UsageBaseline] = [:]
     private var timer: Timer?
     private var localTimer: Timer?
     private var fetchTasks: [String: Task<Void, Never>] = [:]
@@ -207,6 +209,7 @@ final class UsageStore: ObservableObject {
         _disconnected = Published(initialValue: disconnected)
         _order = Published(initialValue: order)
         lastGood = archive.load()
+        baselines = archive.loadBaselines()
         for provider in providers where provider.kind == .localRuntime {
             lastGood.removeValue(forKey: provider.id)
         }
@@ -229,7 +232,7 @@ final class UsageStore: ObservableObject {
             guard let remembered = lastGood[provider.id] else { return Self.placeholder(provider) }
             var snapshot = remembered.snapshot
             snapshot.status = .stale(since: remembered.fetchedAt)
-            return snapshot
+            return forecast(snapshot)
         }
         updateNotchSnapshots()
     }
@@ -524,7 +527,12 @@ final class UsageStore: ObservableObject {
     private func publish(_ snapshot: ProviderSnapshot) {
         guard !disconnected.contains(snapshot.id) else { return }
         var current = Dictionary(uniqueKeysWithValues: snapshots.map { ($0.id, $0) })
-        current[snapshot.id] = named(snapshot)
+        // Every snapshot, not only a fresh one. A rate-limit back-off, a
+        // relaunch or being offline keeps a remembered reading on screen for a
+        // long time — and a forecast attached only to readings that had just
+        // arrived never appeared on it, so a session could run out under a
+        // green ring that was simply showing an older number.
+        current[snapshot.id] = named(forecast(snapshot))
         snapshots = orderedProviders.compactMap { disconnected.contains($0.id) ? nil : current[$0.id] }
     }
 
@@ -660,6 +668,7 @@ final class UsageStore: ObservableObject {
             if provider.kind == .usage {
                 lastGood[provider.id] = (fresh, Date())
                 archive.save(lastGood)
+                learnBaselines(from: fresh)
             }
             refusedAccess.remove(provider.id)
             // A reading that actually came back is proof the credential works,
@@ -683,6 +692,41 @@ final class UsageStore: ObservableObject {
     private func acceptsResult(from provider: UsageProvider, generation: Int) -> Bool {
         !Task.isCancelled && !disconnected.contains(provider.id)
             && generations[provider.id, default: 0] == generation
+    }
+
+    /// Each window's forecast, worked out from what is on screen.
+    ///
+    /// Pure, deliberately: baselines advance only in `learnBaselines`, on a
+    /// reading that has just arrived. A remembered reading re-shown during a
+    /// back-off must not restart or move them.
+    private func forecast(_ snapshot: ProviderSnapshot, now: Date = Date()) -> ProviderSnapshot {
+        var snapshot = snapshot
+        snapshot.windows = snapshot.windows.map { window in
+            var window = window
+            window.runsOutAt = UsageForecast.runsOut(
+                window, baseline: baselines[baselineKey(snapshot.id, window.id)], now: now)
+            return window
+        }
+        return snapshot
+    }
+
+    private func learnBaselines(from snapshot: ProviderSnapshot, now: Date = Date()) {
+        var changed = false
+        for window in snapshot.windows {
+            guard let fraction = window.usedFraction, fraction.isFinite else { continue }
+            let key = baselineKey(snapshot.id, window.id)
+            let baseline = UsageForecast.baseline(baselines[key], fraction: fraction,
+                                                  resetsAt: window.resetsAt, now: now)
+            if baselines[key] != baseline {
+                baselines[key] = baseline
+                changed = true
+            }
+        }
+        if changed { archive.saveBaselines(baselines) }
+    }
+
+    private func baselineKey(_ providerID: String, _ windowID: String) -> String {
+        "\(providerID)/\(windowID)"
     }
 
     /// A failed fetch never invents a number: it either re-shows the last good

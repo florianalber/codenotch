@@ -32,6 +32,10 @@ struct ProviderRing: View {
     /// Where the user asked for it, if at all.
     var weeklyRing: WeeklyRing = .off
     var bandOverride: UsageBand? = nil
+    /// On course to be spent before it resets. The ring carries the same fact
+    /// as the tooltip's bar, since it is the glanceable half of it.
+    var runsOutBeforeReset: Bool = false
+    var weeklyRunsOutBeforeReset: Bool = false
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.codenotchReduceTransparency) private var reduceTransparency
@@ -45,7 +49,14 @@ struct ProviderRing: View {
     private var band: UsageBand {
         guard !isBlocked else { return .exhausted }
         if let bandOverride { return bandOverride }
-        return UsageBand.band(for: usedFraction ?? 0, watchLimit: watchLimit, criticalLimit: criticalLimit)
+        return UsageBand.band(for: usedFraction ?? 0, watchLimit: watchLimit, criticalLimit: criticalLimit,
+                              runsOutBeforeReset: runsOutBeforeReset)
+    }
+    /// Whether the forecast, not the reading, is what set the colour. The ramp
+    /// would then paint it by percentage alone and quietly undo the warning.
+    private var isRaisedByForecast: Bool {
+        runsOutBeforeReset && band != UsageBand.band(for: usedFraction ?? 0, watchLimit: watchLimit,
+                                                    criticalLimit: criticalLimit)
     }
     private var sweep: CGFloat { CGFloat(min(max(usedFraction ?? 0, 0), 1)) }
     private var localSweep: CGFloat { Self.localSweep(for: localContextFraction) }
@@ -64,19 +75,22 @@ struct ProviderRing: View {
     /// special-cases — blocked (no fraction is meaningful once a limit is spent) and an explicit
     /// override from the caller (a deliberate discrete choice, not a reading to interpolate).
     private var primaryRingColor: Color {
-        guard !isBlocked, bandOverride == nil, colorTransitionStyle == .ramp else {
+        guard !isBlocked, bandOverride == nil, !isRaisedByForecast, colorTransitionStyle == .ramp else {
             return band.color(accent: accentColor)
         }
         return UsageBand.rampColor(for: usedFraction ?? 0, watchLimit: watchLimit, accent: accentColor)
     }
 
     private var weeklyBand: UsageBand {
-        isBlocked ? .exhausted : UsageBand.band(for: weeklyFraction ?? 0, watchLimit: watchLimit, criticalLimit: criticalLimit)
+        isBlocked ? .exhausted : UsageBand.band(for: weeklyFraction ?? 0, watchLimit: watchLimit, criticalLimit: criticalLimit,
+                                                runsOutBeforeReset: weeklyRunsOutBeforeReset)
     }
     private var weeklySweep: CGFloat { CGFloat(min(max(weeklyFraction ?? 0, 0), 1)) }
     /// Same fallback rule as `primaryRingColor`, minus `bandOverride` — the weekly ring has none.
     private var weeklyRingColor: Color {
-        guard !isBlocked, colorTransitionStyle == .ramp else { return weeklyBand.color(accent: accentColor) }
+        let raised = weeklyBand != UsageBand.band(for: weeklyFraction ?? 0, watchLimit: watchLimit,
+                                                  criticalLimit: criticalLimit)
+        guard !isBlocked, !raised, colorTransitionStyle == .ramp else { return weeklyBand.color(accent: accentColor) }
         return UsageBand.rampColor(for: weeklyFraction ?? 0, watchLimit: watchLimit, accent: accentColor)
     }
 
@@ -309,7 +323,9 @@ struct ProviderCell: View {
                 localContextFraction: snapshot.localContextFraction,
                 weeklyFraction: snapshot.hasReading ? snapshot.weeklyFraction : nil,
                 weeklyRing: weeklyRing,
-                bandOverride: snapshot.bandOverride
+                bandOverride: snapshot.bandOverride,
+                runsOutBeforeReset: snapshot.headline?.runsOutBeforeReset ?? false,
+                weeklyRunsOutBeforeReset: snapshot.weeklyWindow?.runsOutBeforeReset ?? false
             )
             if showsReading {
             Text(readingText)

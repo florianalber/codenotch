@@ -11,6 +11,14 @@ enum ElapsedCopy {
             : L10n.t("\(elapsed) ago", locale: locale)
     }
 
+    /// The same phrasing for a span that lies ahead rather than behind, so
+    /// "2 hr" means the same thing in both directions. "just now" would read
+    /// as nonsense forwards, so an imminent one is simply "now".
+    static func until(_ date: Date, now: Date = Date(), locale: Locale = L10n.locale) -> String {
+        guard date.timeIntervalSince(now) >= 45 else { return L10n.t("now", locale: locale) }
+        return text(since: now, now: date, locale: locale)
+    }
+
     static func text(since: Date, now: Date = Date(), locale: Locale = L10n.locale) -> String {
         let seconds = max(0, now.timeIntervalSince(since))
         if seconds < 45 { return L10n.t("just now", locale: locale) }

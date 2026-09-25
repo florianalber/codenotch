@@ -28,9 +28,29 @@ struct UsageArchive {
     private let defaults: UserDefaults
     private let key = "lastGoodReadings"
     private let backoffKey = "backoffUntil"
+    private let baselinesKey = "windowPaces"
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+    }
+
+    // MARK: - Forecast baselines
+
+    /// The first reading of each window since it last rolled, kept across
+    /// launches so a forecast survives a restart.
+    ///
+    /// Without this, quitting the app throws away the baseline and the
+    /// measurement starts again from zero — ten minutes of no forecast at all,
+    /// every launch. Keyed by provider and window, since a window only means
+    /// anything within its own account.
+    func loadBaselines() -> [String: UsageBaseline] {
+        guard let data = defaults.data(forKey: baselinesKey) else { return [:] }
+        return (try? JSONDecoder().decode([String: UsageBaseline].self, from: data)) ?? [:]
+    }
+
+    func saveBaselines(_ baselines: [String: UsageBaseline]) {
+        guard let data = try? JSONEncoder().encode(baselines) else { return }
+        defaults.set(data, forKey: baselinesKey)
     }
 
     // MARK: - Back-off

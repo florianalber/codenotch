@@ -135,6 +135,17 @@ struct LimitWindow: Identifiable, Codable, Equatable {
     let duration: TimeInterval?
     var bandOverride: UsageBand? = nil
     var prefersUsedText: Bool = false
+    /// When this window will be spent at the rate it is being spent at — set
+    /// only where that moment falls *before* the window resets, which is the
+    /// only case worth saying anything about. Filled in by the store from its
+    /// own past readings, not by the provider, and deliberately left out of
+    /// `CodingKeys`: it is a statement about now, and an archived one would
+    /// carry a projection from a rate that stopped being measured when the
+    /// app quit.
+    var runsOutAt: Date? = nil
+
+    /// Whether this window is on course to be spent before it resets.
+    var runsOutBeforeReset: Bool { runsOutAt != nil }
 
     init(id: String, group: String? = nil, label: String, usedFraction: Double? = nil,
          remaining: Int? = nil, used: Int? = nil, usedText: String? = nil, detail: String? = nil,
