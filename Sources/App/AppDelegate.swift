@@ -83,6 +83,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// refresher needs to ask one of them how long its token has left, and the
     /// protocol has no business carrying that.
     private var claudeProviders: [ClaudeOAuthProvider] = []
+    private var profileWatcher: ClaudeProfileWatcher?
     /// MiniMax Platform sign-in sheet. Not a UsageProvider — that is MiniMaxProvider.
     private var miniMaxWeb: WebSessionProvider?
 
@@ -869,6 +870,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             (activity?.isBusy ?? false) || (self?.lmstudioMetrics?.isBusy ?? false)
         }
 
+        // A Claude profile signed in or removed after launch. Answered with a
+        // relaunch rather than by grafting a ring on: the list above feeds the
+        // providers, each monitor's session ownership, the names that tell two
+        // accounts apart and the token refresher all at once, and a profile
+        // added any other way would miss whichever of those it was not wired
+        // into. Every reading is archived, so the notch comes back with its
+        // numbers.
+        if !Runtime.isUnderTest {
+            let watcher = ClaudeProfileWatcher(profiles: claudeProfiles)
+            watcher.onChange = { [weak self] profiles in
+                Log.usage.info("claude profiles changed to \(profiles.map(\.displayPath).joined(separator: ", "), privacy: .public); relaunching")
+                self?.relaunch()
+            }
+            watcher.start()
+            profileWatcher = watcher
+        }
+
         // Applied last, right before the panel goes up: every one of these
         // calls a `NotchFleet.apply(...)` that can trigger `reconcile()` on
         // its own — `displayPreference` always does, being how the very
@@ -1076,7 +1094,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         PhoneLinkWindowController.shared.show(pairing: pairing, registry: registry, port: preferences?.phoneLinkPort ?? 8788, serverStatus: status)
     }
 
+    /// Quit, and open again once this process has gone.
+    ///
+    /// Waits on the pid rather than a fixed delay: `open` on a bundle that is
+    /// still running only brings it forward, so starting the new copy early
+    /// would leave nothing running at all.
+    private func relaunch() {
+        let pid = ProcessInfo.processInfo.processIdentifier
+        let reopen = Process()
+        reopen.executableURL = URL(fileURLWithPath: "/bin/sh")
+        reopen.arguments = [
+            "-c", "while /bin/kill -0 \(pid) 2>/dev/null; do /bin/sleep 0.2; done; /usr/bin/open \"$0\"",
+            Bundle.main.bundlePath
+        ]
+        do {
+            try reopen.run()
+        } catch {
+            // Without the helper a quit would simply leave the app closed.
+            Log.usage.error("relaunch failed: \(error.localizedDescription, privacy: .public)")
+            return
+        }
+        NSApp.terminate(nil)
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
+        profileWatcher?.stop()
         ollamaRelay?.configure(enabled: false, endpoint: OllamaEndpoint.defaultAddress)
         lmstudioMetrics?.stop()
         tokenRefresher?.stop()
